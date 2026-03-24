@@ -837,11 +837,13 @@
     }
     render();
 
-    const requestedHistoryScope = normalizeHistoryScope(
-      state.selectedRange === "ALL" ? "ALL" : "1Y"
-    );
-    const startTimestamp =
-      requestedHistoryScope === "ALL"
+    const isOverviewFastRefresh = !getActiveWallet() && reason !== "detail-preload";
+    const requestedHistoryScope = isOverviewFastRefresh
+      ? "SUMMARY"
+      : normalizeHistoryScope(state.selectedRange === "ALL" ? "ALL" : "1Y");
+    const startTimestamp = isOverviewFastRefresh
+      ? startOfUtcHour(Date.now() - 23 * HOUR_MS)
+      : requestedHistoryScope === "ALL"
         ? 0
         : startOfUtcDay(Date.now() - (ONE_YEAR_DAYS - 1) * DAY_MS);
     const endTimestamp = Date.now();
@@ -1568,7 +1570,7 @@
       <button
         class="wallet-card ${summary.addressCount ? "" : "has-empty-state"} ${
           summary.hasMiniChart ? "has-mini-chart" : ""
-        }"
+        } ${summary.showMiniChartPlaceholder ? "has-chart-placeholder" : ""}"
         type="button"
         data-action="open-wallet"
         data-wallet-id="${escapeHtml(summary.wallet.id)}"
@@ -1576,6 +1578,8 @@
         ${
           summary.hasMiniChart
             ? `<div class="wallet-card-chart" aria-hidden="true">${summary.miniChartMarkup}</div>`
+            : summary.showMiniChartPlaceholder
+              ? `<div class="wallet-card-chart wallet-card-chart--placeholder" aria-hidden="true">${buildWalletCardChartPlaceholder()}</div>`
             : ""
         }
         <strong class="wallet-card-name text-strong">${escapeHtml(summary.wallet.name)}</strong>
@@ -2208,6 +2212,25 @@
     return `<div class="skeleton-card skeleton-growth"></div>`;
   }
 
+  function buildWalletCardChartPlaceholder() {
+    return `
+      <svg class="wallet-card-chart-svg wallet-card-chart-svg--placeholder" viewBox="0 0 464 152" preserveAspectRatio="none" role="presentation">
+        <path
+          class="wallet-card-chart-placeholder-area"
+          d="M-8 140 C 28 136, 64 124, 102 114 C 140 104, 176 108, 212 92 C 248 76, 286 38, 326 32 C 364 26, 402 54, 438 40 C 452 35, 464 24, 474 12 L 474 152 L -8 152 Z"
+        ></path>
+        <path
+          class="wallet-card-chart-placeholder-line wallet-card-chart-placeholder-line--glow"
+          d="M-8 140 C 28 136, 64 124, 102 114 C 140 104, 176 108, 212 92 C 248 76, 286 38, 326 32 C 364 26, 402 54, 438 40 C 452 35, 464 24, 474 12"
+        ></path>
+        <path
+          class="wallet-card-chart-placeholder-line wallet-card-chart-placeholder-line--dotted"
+          d="M-8 140 C 28 136, 64 124, 102 114 C 140 104, 176 108, 212 92 C 248 76, 286 38, 326 32 C 364 26, 402 54, 438 40 C 452 35, 464 24, 474 12"
+        ></path>
+      </svg>
+    `;
+  }
+
   function getWalletSummaries() {
     const snapshotsById = getSnapshotsById();
 
@@ -2231,6 +2254,10 @@
         totalUsd: totals.usdValue,
         miniChartMarkup: miniChartScene ? miniChartScene.markup : "",
         hasMiniChart: Boolean(miniChartScene),
+        showMiniChartPlaceholder:
+          !miniChartScene &&
+          addresses.length > 0 &&
+          (runtime.isLoading || runtime.isRefreshing || !runtime.hasLoadedOnce),
         isBalanceLoading:
           addresses.length > 0 &&
           snapshots.length < addresses.length &&
@@ -5207,16 +5234,21 @@
       return null;
     }
 
+    if (
+      !(runtime.intradayPriceHistory instanceof Map) ||
+      !runtime.intradayPriceHistory.size ||
+      !Number.isFinite(runtime.intradayStart) ||
+      !Number.isFinite(runtime.intradayEnd)
+    ) {
+      return null;
+    }
+
     const intradaySnapshots = snapshots.filter(
       (snapshot) => Array.isArray(snapshot.hourlyBalanceTimeline) && snapshot.hourlyBalanceTimeline.length
     );
 
     let timeline = [];
-    if (
-      intradaySnapshots.length === addressCount &&
-      Number.isFinite(runtime.intradayStart) &&
-      Number.isFinite(runtime.intradayEnd)
-    ) {
+    if (intradaySnapshots.length === addressCount) {
       timeline = combineSnapshotTimelines(
         intradaySnapshots,
         "hourlyBalanceTimeline",
@@ -5231,11 +5263,14 @@
       );
     }
 
-    if (!timeline.length && snapshots.length === addressCount) {
-      timeline = buildFlatTimeline(balanceSats, runtime.currentPriceUsd, 24, HOUR_MS, startOfUtcHour);
+    if (!timeline.length) {
+      return null;
     }
 
     const points = timeline.slice(-24);
+    if (points.length < 2) {
+      return null;
+    }
     const values = points.map((point) =>
       getDisplayUnit() === "USD"
         ? Number.isFinite(point.usdValue)
