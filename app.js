@@ -162,6 +162,7 @@
   let headerStatusTimer = 0;
   let addressFeedbackFadeTimer = 0;
   let addressFeedbackHideTimer = 0;
+  let overviewDetailPreloadPromise = null;
   const StorageLayer = {
     buildDefaultState,
     loadState,
@@ -838,9 +839,10 @@
     render();
 
     const isOverviewFastRefresh = !getActiveWallet() && reason !== "detail-preload";
+    const shouldPreloadOverviewDetail = isOverviewFastRefresh && shouldPreloadOverviewDetailInBackground();
     const requestedHistoryScope = isOverviewFastRefresh
       ? "SUMMARY"
-      : normalizeHistoryScope(state.selectedRange === "ALL" ? "ALL" : "1Y");
+      : getFullHistoryScopeForBackground();
     const startTimestamp = isOverviewFastRefresh
       ? startOfUtcHour(Date.now() - 23 * HOUR_MS)
       : requestedHistoryScope === "ALL"
@@ -950,6 +952,9 @@
       StorageLayer.saveState(state);
       StorageLayer.saveRuntimeCache(runtime);
       render();
+      if (shouldPreloadOverviewDetail) {
+        preloadOverviewDetailDataIfNeeded({ force: true });
+      }
     } catch (error) {
       runtime.isLoading = false;
       runtime.isRefreshing = false;
@@ -977,7 +982,7 @@
 
   async function refreshScopedEntries(
     entries,
-    { reason, allowSkeleton, historyScopeOverride = null } = {}
+    { reason, allowSkeleton, historyScopeOverride = null, silent = false } = {}
   ) {
     const scopedEntries = Array.isArray(entries)
       ? entries.filter(
@@ -994,13 +999,15 @@
       return;
     }
 
-    runtime.isLoading = allowSkeleton && !runtime.hasLoadedOnce;
-    runtime.isRefreshing = runtime.hasLoadedOnce;
-    setHeaderStatus("");
-    if (reason !== "initial") {
-      runtime.banner = null;
+    if (!silent) {
+      runtime.isLoading = allowSkeleton && !runtime.hasLoadedOnce;
+      runtime.isRefreshing = runtime.hasLoadedOnce;
+      setHeaderStatus("");
+      if (reason !== "initial") {
+        runtime.banner = null;
+      }
+      render();
     }
-    render();
 
     const requestedHistoryScope = normalizeHistoryScope(
       historyScopeOverride || getRequiredDetailScopeForRange()
@@ -1076,8 +1083,8 @@
 
       runtime = {
         ...runtime,
-        isLoading: false,
-        isRefreshing: false,
+        isLoading: silent ? runtime.isLoading : false,
+        isRefreshing: silent ? runtime.isRefreshing : false,
         hasLoadedOnce: true,
         currentPriceUsd: marketData.currentPriceUsd,
         priceHistory: marketData.priceHistory,
@@ -1091,28 +1098,34 @@
           !marketData.historyAvailable ||
           marketData.historyMissingDays > 0,
         historyScope: pickHigherHistoryScope(runtime.historyScope, requestedHistoryScope),
-        banner: bannerParts.length
-          ? {
-              tone: "warning",
-              text: bannerParts.join(" "),
-            }
-          : null,
+        banner: silent
+          ? runtime.banner
+          : bannerParts.length
+            ? {
+                tone: "warning",
+                text: bannerParts.join(" "),
+              }
+            : null,
         timelineStart: effectiveStartTimestamp,
         timelineEnd: endTimestamp,
         intradayStart: marketData.intradayStart,
         intradayEnd: marketData.intradayEnd,
       };
-      setHeaderStatus(bannerParts.length || reason !== "manual" ? "" : "Watch refreshed");
+      if (!silent) {
+        setHeaderStatus(bannerParts.length || reason !== "manual" ? "" : "Watch refreshed");
+      }
 
       state.lastUpdated = new Date().toISOString();
       StorageLayer.saveState(state);
       StorageLayer.saveRuntimeCache(runtime);
       render();
     } catch (error) {
-      runtime.isLoading = false;
-      runtime.isRefreshing = false;
-      setHeaderStatus("");
-      render();
+      if (!silent) {
+        runtime.isLoading = false;
+        runtime.isRefreshing = false;
+        setHeaderStatus("");
+        render();
+      }
       throw error;
     }
   }
@@ -2480,6 +2493,10 @@
       return true;
     }
 
+    return isRuntimeCacheStale();
+  }
+
+  function isRuntimeCacheStale() {
     if (!state.lastUpdated) {
       return true;
     }
@@ -2512,8 +2529,40 @@
     );
   }
 
+  function shouldPreloadOverviewDetailInBackground() {
+    if (!state.addresses.length || getActiveWallet()) {
+      return false;
+    }
+
+    const fullScope = getFullHistoryScopeForBackground();
+    return !hasCompleteCachedCoverage() || !hasCompleteDetailCoverage(fullScope) || isRuntimeCacheStale();
+  }
+
+  function preloadOverviewDetailDataIfNeeded({ force = false } = {}) {
+    if (overviewDetailPreloadPromise || runtime.isLoading || getActiveWallet() || !state.addresses.length) {
+      return overviewDetailPreloadPromise;
+    }
+
+    if (!force && !shouldPreloadOverviewDetailInBackground()) {
+      return null;
+    }
+
+    overviewDetailPreloadPromise = refreshScopedEntries(state.addresses, {
+      reason: "overview-detail-preload",
+      allowSkeleton: false,
+      historyScopeOverride: getFullHistoryScopeForBackground(),
+      silent: true,
+    })
+      .catch(() => null)
+      .finally(() => {
+        overviewDetailPreloadPromise = null;
+      });
+
+    return overviewDetailPreloadPromise;
+  }
+
   function preloadActiveDetailDataIfNeeded() {
-    if (runtime.isLoading || runtime.isRefreshing) {
+    if (runtime.isLoading || runtime.isRefreshing || overviewDetailPreloadPromise) {
       return;
     }
 
@@ -2759,7 +2808,7 @@
   }
 
   function getFullHistoryScopeForBackground() {
-    return state.selectedRange === "ALL" ? "ALL" : "1Y";
+    return getRequiredDetailScopeForRange();
   }
 
   function resetViewTransientState() {
