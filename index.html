@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#070707" />
+    <title>Bitkit Watch</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css?v=20260324-wallet-card-chart-2" />
+    <script>
+      (() => {
+        const host = window.location.hostname;
+        const isLocalCaptureHost =
+          host === "localhost" ||
+          host === "0.0.0.0" ||
+          host === "::1" ||
+          host === "[::1]" ||
+          host.endsWith(".local") ||
+          /^127(?:\.\d{1,3}){3}$/.test(host);
+
+        if (!isLocalCaptureHost) {
+          return;
+        }
+
+        const script = document.createElement("script");
+        script.src = "https://mcp.figma.com/mcp/html-to-design/capture.js";
+        script.async = true;
+        document.head.appendChild(script);
+      })();
+    </script>
+    <script src="assets/satoshi-demo-snapshot.js" defer></script>
+    <script src="assets/bitcoin-facts.js" defer></script>
+    <script src="app.js?v=20260324-wallet-card-chart-4" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <nav class="brand-lockup" aria-label="Bitkit Watch navigation">
+          <button class="brand-home-button" id="brandHomeButton" type="button" aria-label="Bitkit Watch home">
+            <img class="brand-logo" src="assets/bitkit-logo.svg" alt="Bitkit" />
+          </button>
+
+          <span class="brand-divider" aria-hidden="true"></span>
+
+          <button class="brand-crumb-button" id="vaultHomeButton" type="button">WATCH</button>
+
+          <span class="brand-divider" id="walletHeaderDivider" aria-hidden="true" hidden></span>
+
+          <div class="wallet-crumb" id="walletCrumb" hidden>
+            <div class="wallet-title-button" id="walletTitleButton" role="button" tabindex="0" aria-label="Rename wallet">
+              <span id="walletTitleText"></span>
+              <span class="wallet-title-indicator" aria-hidden="true">
+                <svg id="walletTitleIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M17 3a2.83 2.83 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z"></path>
+                  <path d="m15 5 4 4"></path>
+                </svg>
+                <span class="wallet-title-caret" id="walletTitleCaret"></span>
+              </span>
+            </div>
+            <button class="wallet-delete-button" id="walletDeleteButton" type="button" aria-label="Delete wallet" title="Delete wallet">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 6h18"></path>
+                <path d="M8 6V4.8A1.8 1.8 0 0 1 9.8 3h4.4A1.8 1.8 0 0 1 16 4.8V6"></path>
+                <path d="M19 6l-1 13.2A2 2 0 0 1 16 21H8a2 2 0 0 1-2-1.8L5 6"></path>
+                <path d="M10 11v6"></path>
+                <path d="M14 11v6"></path>
+              </svg>
+            </button>
+          </div>
+
+          <span class="brand-divider" id="addressHeaderDivider" aria-hidden="true" hidden></span>
+
+          <div
+            class="address-crumb"
+            id="addressCrumb"
+            hidden
+            role="button"
+            tabindex="0"
+            aria-label="Copy address"
+            title="Copy address"
+          >
+            <span class="address-crumb-text address-crumb-text--full" id="addressCrumbTextFull"></span>
+            <span class="address-crumb-text address-crumb-text--short" id="addressCrumbTextShort"></span>
+          </div>
+
+          <span class="brand-divider" id="addressStatusDivider" aria-hidden="true" hidden></span>
+
+          <p class="address-copy-status text-meta" id="addressCopyStatus" hidden></p>
+        </nav>
+
+        <div class="topbar-actions">
+          <p class="topbar-status text-meta" id="headerStatus" hidden></p>
+
+          <button class="button button--icon unit-toggle-button" id="unitDisplayButton" type="button" aria-label="Primary display unit" title="Primary display unit">
+            <span class="unit-toggle-button-label" id="unitDisplayButtonLabel">₿</span>
+          </button>
+
+          <button class="button button--icon" id="toggleBalancesButton" type="button" aria-label="Hide balances" title="Hide balances">
+            <span class="balance-toggle-icon" id="balanceToggleIcon" aria-hidden="true"></span>
+          </button>
+
+          <button class="button button--icon" id="refreshButton" type="button" aria-label="Refresh" title="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 0 0-15.5-6.36L3 8"></path>
+              <path d="M3 3v5h5"></path>
+              <path d="M3 12a9 9 0 0 0 15.5 6.36L21 16"></path>
+              <path d="M16 16h5v5"></path>
+            </svg>
+          </button>
+
+          <button class="button button--icon" id="settingsButton" type="button" aria-label="Settings" title="Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 5h6"></path>
+              <path d="M15 5h6"></path>
+              <path d="M9 5a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z"></path>
+              <path d="M3 12h10"></path>
+              <path d="M17 12h4"></path>
+              <path d="M13 12a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z"></path>
+              <path d="M3 19h4"></path>
+              <path d="M13 19h8"></path>
+              <path d="M7 19a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div id="appBanner" class="app-banner" hidden></div>
+      <div class="watch-view-demo-wallet" aria-hidden="true"></div>
+
+      <main class="layout">
+        <section class="wallets-overview" id="walletsOverview" hidden aria-labelledby="overviewTitle">
+          <header class="overview-copy">
+            <h2 id="overviewTitle">
+              WATCH YOUR <span class="text-accent">BITCOIN</span>
+            </h2>
+            <p class="copy-measure">
+              See your bitcoin grow over time. Safely and privately. Bitkit Watch lives only in your browser. No private keys. No account. No authentication. Just keep watch.
+            </p>
+          </header>
+
+          <div class="wallet-grid" id="walletGrid" aria-live="polite"></div>
+        </section>
+
+        <section class="wallet-detail" id="walletDetail" hidden aria-labelledby="walletTitleText">
+          <div class="detail-columns">
+            <section class="detail-column detail-column-activity" aria-label="Wallet activity">
+              <section class="detail-block">
+                <header class="metric-head">
+                  <p class="text-meta" id="walletSecondarySummary">$ 0.00</p>
+                  <h2 class="wallet-balance-primary" id="walletPrimarySummary">₿ 0</h2>
+                </header>
+
+                <div class="transaction-list" id="walletTransactions" aria-live="polite"></div>
+
+                <button class="button button--pill button--filled transaction-more-button" id="walletTransactionsToggle" type="button" hidden>
+                  Show all
+                </button>
+              </section>
+
+              <section class="detail-block" id="walletAddressesSection" aria-label="Wallet addresses">
+                <header class="section-head">
+                  <h5 id="walletAddressesKicker">WALLET WATCHLIST</h5>
+                  <h2 id="walletAddressesHeading">ADDRESSES</h2>
+                </header>
+
+                <div class="panel address-list" id="walletAddressList" aria-live="polite"></div>
+
+                <form class="wallet-add-form" id="walletAddAddressForm" novalidate>
+                  <div class="wallet-add-row">
+                    <label class="field">
+                      <span class="sr-only">Bitcoin address</span>
+                      <input
+                        class="field__input"
+                        id="walletAddressInput"
+                        name="address"
+                        type="text"
+                        autocomplete="off"
+                        spellcheck="false"
+                        placeholder="bitcoin address"
+                        required
+                      />
+                    </label>
+
+                    <button class="button button--pill button--filled" type="submit">Add</button>
+                  </div>
+
+                  <p class="address-empty-warning text-meta" id="walletAddressEmptyWarning" hidden>
+                    <span class="address-empty-warning-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 9v4"></path>
+                        <path d="M12 17h.01"></path>
+                        <path d="M10.3 3.8 2.6 17.2A2 2 0 0 0 4.3 20h15.4a2 2 0 0 0 1.73-2.8L13.7 3.8a2 2 0 0 0-3.4 0Z"></path>
+                      </svg>
+                    </span>
+                    <span>Be careful. Don't enter your private key.</span>
+                  </p>
+
+                  <div class="form-feedback" id="walletAddressFeedback" hidden></div>
+                </form>
+              </section>
+
+              <section class="detail-block" id="addressTagsSection" hidden aria-label="Address tags">
+                <header class="section-head">
+                  <h5>TAGS</h5>
+                  <h2>TAG THIS ADDRESS</h2>
+                </header>
+
+                <div class="address-tags" id="addressTagList" aria-live="polite"></div>
+
+                <form class="wallet-add-form" id="addressTagForm" novalidate>
+                  <div class="wallet-add-row">
+                    <label class="field">
+                      <span class="sr-only">Address tag</span>
+                      <input
+                        class="field__input"
+                        id="addressTagInput"
+                        name="tag"
+                        type="text"
+                        autocomplete="off"
+                        spellcheck="false"
+                        placeholder="add tag"
+                      />
+                    </label>
+
+                    <button class="button button--pill button--filled" type="submit">Add</button>
+                  </div>
+
+                  <div class="form-feedback" id="addressTagFeedback" hidden></div>
+                </form>
+              </section>
+            </section>
+
+            <aside class="detail-column detail-column-sidebar" id="walletDetailSidebar">
+              <section class="detail-block" aria-label="Wallet growth">
+                <header class="section-head">
+                  <h5 id="walletChartKicker">WALLET GROWTH</h5>
+                  <h2 class="chart-title">
+                    <span class="wallet-chart-title-symbol" id="walletChartTitleSymbol">₿</span>
+                    <span id="walletChartTitleText">VALUE OVER TIME</span>
+                    <span class="wallet-chart-growth" id="walletChartGrowth" hidden></span>
+                  </h2>
+                </header>
+
+                <article class="panel wallet-chart-card">
+                  <div class="wallet-chart-tabs" id="walletChartTabs" role="tablist" aria-label="Wallet growth range">
+                    <button class="wallet-chart-tab" type="button" role="tab" data-range="1D">1 day</button>
+                    <button class="wallet-chart-tab is-active" type="button" role="tab" data-range="30D">30 day</button>
+                    <button class="wallet-chart-tab" type="button" role="tab" data-range="1Y">1 year</button>
+                    <button class="wallet-chart-tab" type="button" role="tab" data-range="ALL">All time</button>
+                  </div>
+                  <div class="wallet-chart-stage" id="walletChartStage" role="button" tabindex="0" aria-label="Open expanded wallet chart"></div>
+                </article>
+              </section>
+
+              <section class="detail-block wallet-facts-widget" id="walletFactsSection" aria-label="Bitcoin facts" hidden>
+                <header class="section-head">
+                  <h5>DID YOU KNOW?</h5>
+                  <h2>BITCOIN FACTS</h2>
+                </header>
+
+                <article class="panel wallet-facts-card">
+                  <p class="wallet-facts-copy" id="walletFactsText" aria-live="polite"></p>
+
+                  <button
+                    class="button button--icon button--icon-dim"
+                    id="walletFactsButton"
+                    type="button"
+                    aria-label="Show another bitcoin fact"
+                    title="Show another bitcoin fact"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M21 12a9 9 0 0 0-15.5-6.36L3 8"></path>
+                      <path d="M3 3v5h5"></path>
+                      <path d="M3 12a9 9 0 0 0 15.5 6.36L21 16"></path>
+                      <path d="M16 16h5v5"></path>
+                    </svg>
+                  </button>
+                </article>
+              </section>
+            </aside>
+          </div>
+        </section>
+
+        <footer class="app-footer" aria-label="Bitkit promotion">
+          <div class="app-footer-content">
+            <p class="app-footer-copy">
+              Download
+              <a href="https://bitkit.to" target="_blank" rel="noreferrer">Bitkit</a> for
+              <a href="https://get.bitkit.to/iOS" target="_blank" rel="noreferrer">iOS</a>
+              or
+              <a href="https://get.bitkit.to/PlayStore" target="_blank" rel="noreferrer">Android</a>
+              to spend your bitcoin!<br />
+              <span>Bitkit Watch was built with love and dedication by Synonym Software, S.A. DE C.V. ©2026. All rights reserved. v0.0.6.</span>
+            </p>
+
+            <p class="app-footer-price" id="appFooterPrice" aria-label="Current bitcoin price">
+              <span class="app-footer-price__reference" id="appFooterPriceReference">₿ 100,000,000</span>
+              <span class="app-footer-price__equals" aria-hidden="true">=</span>
+              <span class="app-footer-price__value" id="appFooterPriceValue">$ --</span>
+            </p>
+          </div>
+        </footer>
+      </main>
+
+      <div class="modal modal--transaction" id="transactionModal" hidden>
+        <button class="modal__scrim" id="transactionModalBackdrop" type="button" aria-label="Close transaction detail"></button>
+        <section class="panel panel--modal modal__card modal__card--compact transaction-modal-card" role="dialog" aria-modal="true" aria-labelledby="transactionModalTitle">
+          <header class="modal__head">
+            <h5 id="transactionModalKicker">TRANSACTION</h5>
+            <button class="button button--icon button--icon-sm button--icon-subtle" id="transactionModalClose" type="button" aria-label="Close transaction detail">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m6 6 12 12"></path>
+                <path d="M18 6 6 18"></path>
+              </svg>
+            </button>
+          </header>
+          <div class="transaction-modal-body" id="transactionModalBody"></div>
+        </section>
+      </div>
+
+      <div class="modal modal--chart" id="chartModal" hidden>
+        <button class="modal__scrim" id="chartModalBackdrop" type="button" aria-label="Close expanded wallet chart"></button>
+        <section class="panel panel--modal modal__card modal__card--wide chart-modal-card" role="dialog" aria-modal="true" aria-labelledby="chartModalTitle">
+          <header class="modal__head chart-modal-toolbar">
+            <div class="section-head">
+              <h5 id="chartModalKicker">WALLET GROWTH</h5>
+              <h2 class="chart-title" id="chartModalTitle">
+                <span class="wallet-chart-title-symbol" id="chartModalTitleSymbol">₿</span>
+                <span id="chartModalTitleText">VALUE OVER TIME</span>
+                <span class="wallet-chart-growth" id="chartModalGrowth" hidden></span>
+              </h2>
+            </div>
+            <button class="button button--icon button--icon-sm button--icon-subtle" id="chartModalClose" type="button" aria-label="Close expanded wallet chart">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m6 6 12 12"></path>
+                <path d="M18 6 6 18"></path>
+              </svg>
+            </button>
+          </header>
+          <article class="panel wallet-chart-card chart-modal-chart-card">
+            <div class="wallet-chart-tabs" id="chartModalTabs" role="tablist" aria-label="Expanded wallet growth range">
+              <button class="wallet-chart-tab" type="button" role="tab" data-range="1D">1 day</button>
+              <button class="wallet-chart-tab is-active" type="button" role="tab" data-range="30D">30 day</button>
+              <button class="wallet-chart-tab" type="button" role="tab" data-range="1Y">1 year</button>
+              <button class="wallet-chart-tab" type="button" role="tab" data-range="ALL">All time</button>
+            </div>
+            <div class="wallet-chart-stage chart-modal-stage" id="chartModalStage" aria-hidden="true"></div>
+          </article>
+        </section>
+      </div>
+
+      <div class="modal modal--settings" id="settingsModal" hidden>
+        <button class="modal__scrim" id="settingsModalBackdrop" type="button" aria-label="Close settings"></button>
+        <section class="panel panel--modal modal__card modal__card--compact modal__card--padded-lg settings-modal-card" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle">
+          <header class="modal__head settings-modal-toolbar">
+            <h5>SETTINGS</h5>
+            <button class="button button--icon button--icon-sm button--icon-subtle" id="settingsModalClose" type="button" aria-label="Close settings">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m6 6 12 12"></path>
+                <path d="M18 6 6 18"></path>
+              </svg>
+            </button>
+          </header>
+
+          <div class="settings-modal-body">
+            <h2 class="modal-title" id="settingsModalTitle">YOU ARE IN CONTROL</h2>
+            <section class="settings-wrapper">
+              <section class="settings-preference" aria-labelledby="settingsDenominationLabel">
+                <div class="settings-preference-row">
+                  <div class="settings-preference-copy">
+                    <span class="settings-preference-icon settings-preference-icon--accent settings-preference-icon--bitcoin" aria-hidden="true">₿</span>
+                    <span class="text-value-sm">Bitcoin denomination</span>
+                  </div>
+                  <div class="settings-notation-radios" role="radiogroup" aria-label="Bitcoin denomination">
+                    <label class="settings-notation-radio">
+                      <input id="settingsNotationModern" type="radio" name="bitcoin-notation" value="MODERN" data-notation="MODERN" checked />
+                      <span class="settings-notation-radio-control" aria-hidden="true"></span>
+                      <span class="settings-notation-radio-label">Modern (₿)</span>
+                    </label>
+                    <label class="settings-notation-radio">
+                      <input id="settingsNotationClassic" type="radio" name="bitcoin-notation" value="CLASSIC" data-notation="CLASSIC" />
+                      <span class="settings-notation-radio-control" aria-hidden="true"></span>
+                      <span class="settings-notation-radio-label">Classic (BTC)</span>
+                    </label>
+                  </div>
+                </div>
+              </section>
+
+              <section class="settings-preference" aria-labelledby="settingsDustLabel">
+                <div class="settings-preference-row">
+                  <div class="settings-preference-copy">
+                    <span class="settings-preference-icon settings-preference-icon--accent" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 3v18"></path>
+                        <path d="M4.8 7.2 19.2 16.8"></path>
+                        <path d="M4.8 16.8 19.2 7.2"></path>
+                      </svg>
+                    </span>
+                    <span class="text-value-sm">Dust transactions in activity</span>
+                  </div>
+                  <button class="settings-switch" id="settingsHideDustButton" type="button" role="switch" aria-checked="false" aria-label="Show dust transactions in activity">
+                    <span class="settings-switch-thumb"></span>
+                  </button>
+                </div>
+              </section>
+
+              <section class="settings-preference" aria-labelledby="settingsBackgroundLabel">
+                <div class="settings-preference-row">
+                  <div class="settings-preference-copy">
+                    <span class="settings-preference-icon settings-preference-icon--accent" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                        <path d="M4 7h16"></path>
+                        <path d="M4 12h16"></path>
+                        <path d="M4 17h16"></path>
+                      </svg>
+                    </span>
+                    <span class="text-value-sm">Bitkit background graphics</span>
+                  </div>
+                  <button class="settings-switch" id="settingsBackgroundGraphicsButton" type="button" role="switch" aria-checked="true" aria-label="Show Bitkit background graphics">
+                    <span class="settings-switch-thumb"></span>
+                  </button>
+                </div>
+              </section>
+
+            </section>
+
+            <div class="settings-modal-actions">
+              <button class="button button--pill button--danger" id="settingsClearStorageButton" type="button" aria-label="Delete wallet data">
+                <span class="button__icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 6h18"></path>
+                    <path d="M8 6V4.8A1.8 1.8 0 0 1 9.8 3h4.4A1.8 1.8 0 0 1 16 4.8V6"></path>
+                    <path d="M19 6l-1 13.2A2 2 0 0 1 16 21H8a2 2 0 0 1-2-1.8L5 6"></path>
+                    <path d="M10 11v6"></path>
+                    <path d="M14 11v6"></path>
+                  </svg>
+                </span>
+                <span>Reset wallet data</span>
+              </button>
+
+              <button class="button button--pill button--filled button--stretch" id="settingsFooterCloseButton" type="button" aria-label="Close">
+                <span>OK</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </body>
+</html>
