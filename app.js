@@ -56,6 +56,19 @@
   });
   const SATOSHI_BAKED_SNAPSHOT = normalizeBakedDemoSnapshot(globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT);
   const BUNDLED_BITCOIN_FACTS = globalThis.BITKIT_VAULT_BITCOIN_FACTS;
+  const PROBABLE_MNEMONIC_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
+  const EXTENDED_PRIVATE_KEY_PREFIXES = Object.freeze([
+    "xprv",
+    "yprv",
+    "zprv",
+    "Yprv",
+    "Zprv",
+    "tprv",
+    "uprv",
+    "vprv",
+    "Uprv",
+    "Vprv",
+  ]);
   const ADDRESS_API_PROVIDERS = [
     { name: "Mempool", baseUrl: "https://mempool.space/api" },
     { name: "Blockstream", baseUrl: "https://blockstream.info/api" },
@@ -587,6 +600,17 @@
       const parsedAddresses = parseAddressInput(dom.walletAddressInput.value);
       if (!parsedAddresses.length) {
         showAddressFeedback("Enter a Bitcoin address.", "error");
+        return;
+      }
+
+      const sensitiveInputCheck = await ValidationLayer.detectSensitiveBitcoinInput(
+        dom.walletAddressInput.value,
+        parsedAddresses
+      );
+      if (sensitiveInputCheck.detected) {
+        dom.walletAddAddressForm.reset();
+        showAddressFeedback(sensitiveInputCheck.message, "error");
+        render();
         return;
       }
 
@@ -2222,7 +2246,7 @@
   }
 
   function buildSparklineSkeleton() {
-    return `<div class="skeleton-card skeleton-growth"></div>`;
+    return `<div class="wallet-chart-loader wallet-card-chart--placeholder" aria-hidden="true">${buildWalletCardChartPlaceholder()}</div>`;
   }
 
   function buildWalletCardChartPlaceholder() {
@@ -4188,7 +4212,122 @@
 
       return false;
     },
+
+    async detectSensitiveBitcoinInput(rawValue, parsedEntries = []) {
+      const sourceEntries = Array.isArray(parsedEntries) ? parsedEntries : [];
+      for (const entry of sourceEntries) {
+        const secretKind = await classifySensitiveBitcoinToken(entry);
+        if (secretKind) {
+          return {
+            detected: true,
+            kind: secretKind,
+            message:
+              secretKind === "recovery-phrase"
+                ? "That looks like a Bitcoin recovery phrase. Bitkit Watch only accepts public addresses, so the pasted secret was cleared before anything was validated or sent anywhere."
+                : "That looks like a Bitcoin private key. Bitkit Watch only accepts public addresses, so the pasted secret was cleared before anything was validated or sent anywhere.",
+          };
+        }
+      }
+
+      const normalizedRaw = typeof rawValue === "string" ? rawValue.trim() : "";
+      if (looksLikeRecoveryPhrase(normalizedRaw)) {
+        return {
+          detected: true,
+          kind: "recovery-phrase",
+          message:
+            "That looks like a Bitcoin recovery phrase. Bitkit Watch only accepts public addresses, so the pasted secret was cleared before anything was validated or sent anywhere.",
+        };
+      }
+
+      return {
+        detected: false,
+        kind: null,
+        message: "",
+      };
+    },
   };
+
+  async function classifySensitiveBitcoinToken(value) {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (!normalized) {
+      return null;
+    }
+
+    if (looksLikeExtendedPrivateKey(normalized) || looksLikeRawHexPrivateKey(normalized)) {
+      return "private-key";
+    }
+
+    if (await validateWifPrivateKey(normalized)) {
+      return "private-key";
+    }
+
+    return null;
+  }
+
+  async function validateWifPrivateKey(value) {
+    if (!/^(5[1-9A-HJ-NP-Za-km-z]{50}|[KL][1-9A-HJ-NP-Za-km-z]{51})$/.test(value)) {
+      return false;
+    }
+
+    const decoded = decodeBase58(value);
+    if (!decoded || (decoded.length !== 37 && decoded.length !== 38)) {
+      return false;
+    }
+
+    const payload = decoded.slice(0, -4);
+    const checksum = decoded.slice(-4);
+    if (payload[0] !== 0x80) {
+      return false;
+    }
+
+    if (payload.length !== 33 && payload.length !== 34) {
+      return false;
+    }
+
+    if (payload.length === 34 && payload[payload.length - 1] !== 0x01) {
+      return false;
+    }
+
+    if (!crypto?.subtle?.digest) {
+      return true;
+    }
+
+    try {
+      const hash = await doubleSha256(payload);
+      return checksum.every((byte, index) => byte === hash[index]);
+    } catch (error) {
+      return true;
+    }
+  }
+
+  function looksLikeExtendedPrivateKey(value) {
+    return (
+      EXTENDED_PRIVATE_KEY_PREFIXES.some((prefix) => value.startsWith(prefix)) &&
+      /^[1-9A-HJ-NP-Za-km-z]+$/.test(value.slice(4)) &&
+      value.length >= 100
+    );
+  }
+
+  function looksLikeRawHexPrivateKey(value) {
+    return /^(0x)?[0-9a-fA-F]{64}$/.test(value);
+  }
+
+  function looksLikeRecoveryPhrase(value) {
+    if (!value || /[,;]/.test(value)) {
+      return false;
+    }
+
+    const words = value
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+
+    return (
+      PROBABLE_MNEMONIC_WORD_COUNTS.has(words.length) &&
+      words.every((word) => /^[a-z]{3,8}$/.test(word))
+    );
+  }
 
   async function validateBase58Address(address) {
     const decoded = decodeBase58(address);
