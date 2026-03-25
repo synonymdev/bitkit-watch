@@ -11,7 +11,7 @@
       href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800;900&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=20260325-fiat-settings-2" />
+    <link rel="stylesheet" href="styles.css?v=20260325-faq-8" />
     <script>
       (() => {
         const host = window.location.hostname;
@@ -35,7 +35,7 @@
     </script>
     <script src="assets/satoshi-demo-snapshot.js" defer></script>
     <script src="assets/bitcoin-facts.js" defer></script>
-    <script src="app.js?v=20260325-fiat-settings-3" defer></script>
+    <script src="app.js?v=20260325-faq-5" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -48,6 +48,10 @@
           <span class="brand-divider" aria-hidden="true"></span>
 
           <button class="brand-crumb-button" id="vaultHomeButton" type="button">WATCH</button>
+
+          <span class="brand-divider" id="faqHeaderDivider" aria-hidden="true" hidden></span>
+
+          <span class="brand-crumb-button brand-crumb-button--current" id="faqCrumb" hidden>FAQ</span>
 
           <span class="brand-divider" id="walletHeaderDivider" aria-hidden="true" hidden></span>
 
@@ -126,6 +130,14 @@
               <path d="M7 19a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z"></path>
             </svg>
           </button>
+
+          <button class="button button--icon" id="faqButton" type="button" aria-label="Open FAQ" title="FAQ">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M9.25 9a2.75 2.75 0 1 1 4.96 1.64c-.52.68-1.35 1.07-1.9 1.71-.5.58-.81 1.19-.81 2.15"></path>
+              <path d="M12 17h.01"></path>
+              <circle cx="12" cy="12" r="9"></circle>
+            </svg>
+          </button>
         </div>
       </header>
 
@@ -139,7 +151,9 @@
               WATCH YOUR <span class="text-accent">BITCOIN</span>
             </h2>
             <p class="copy-measure">
-              See your bitcoin grow over time. Safely and privately. Bitkit Watch lives only in your browser. No private keys. No account. No authentication. Just keep watch.
+              See your bitcoin grow over time.
+              <button class="copy-highlight copy-highlight-button" id="overviewFaqButton" type="button">Safely and privately.</button>
+              Bitkit Watch lives only in your browser. No private keys. No account. No authentication. Just keep watch.
             </p>
           </header>
 
@@ -286,6 +300,19 @@
           </div>
         </section>
 
+        <section class="faq-view" id="faqView" hidden aria-labelledby="faqTitle">
+          <header class="faq-copy">
+            <h2 id="faqTitle">
+              BUILT FOR <span class="text-accent">TRUE BITCOINERS</span>
+            </h2>
+            <p class="copy-measure">
+              Let&apos;s quickly take away your concerns. Bitkit Watch was built for bitcoiners who want to keep an eye on their stack without giving up privacy.
+            </p>
+          </header>
+
+          <div class="faq-grid" id="faqGrid"></div>
+        </section>
+
         <footer class="app-footer" aria-label="Bitkit promotion">
           <div class="app-footer-content">
             <p class="app-footer-copy">
@@ -295,7 +322,7 @@
               or
               <a href="https://get.bitkit.to/PlayStore" target="_blank" rel="noreferrer">Android</a>
               to spend your bitcoin!<br />
-              <span>Bitkit Watch was built with love and dedication by Synonym Software, S.A. DE C.V. ©2026. All rights reserved. v0.0.7.</span>
+              <span>Bitkit Watch was built with love and dedication by Synonym Software, S.A. DE C.V. ©2026. All rights reserved. v0.0.8.</span>
             </p>
 
             <p class="app-footer-price" id="appFooterPrice" aria-label="Current bitcoin price">

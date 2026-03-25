@@ -81,6 +81,38 @@
     GBP: { prefix: "£", icon: "£", fractionDigits: 2 },
     CNY: { prefix: "CN¥", icon: "¥", fractionDigits: 2 },
   });
+  const FAQ_ITEMS = Object.freeze([
+    {
+      question: "Does Bitkit Watch hold my keys?",
+      answer:
+        "No. Bitkit Watch is watch-only. It never asks for a seed, never imports a private key, and cannot sign on your behalf.",
+    },
+    {
+      question: "Where does my data live?",
+      answer:
+        "On this device, in this browser. Wallet names, watchlists, settings, and cached snapshots stay local until you wipe them.",
+    },
+    {
+      question: "Does Synonym get my watchlist?",
+      answer:
+        "There is no Bitkit Watch account and no cloud sync. Synonym does not get a hosted profile of your watch-only setup.",
+    },
+    {
+      question: "What gets sent to APIs?",
+      answer:
+        "Only the public addresses you choose to watch, plus market-data requests needed to price them. Enough to price your stack, not enough to control it.",
+    },
+    {
+      question: "Can Bitkit Watch move my bitcoin?",
+      answer:
+        "Not a chance. No signing. No custody. No hot wallet tricks. It cannot spend your ₿. Download Bitkit for iOS and Android to intentionally spend your bitcoin.",
+    },
+    {
+      question: "How do I stay extra private?",
+      answer:
+        "Watch-only is safer, but not invisible. Address lookups still touch public APIs, so use a fresh browser profile, VPN, or Tor when you want more distance.",
+    },
+  ]);
   const DEFAULT_SETTINGS = Object.freeze({
     activeWalletId: null,
     activeAddressId: null,
@@ -100,7 +132,10 @@
       "unitDisplayButton",
       "unitDisplayButtonLabel",
       "settingsButton",
+      "faqButton",
       "headerStatus",
+      "faqHeaderDivider",
+      "faqCrumb",
       "walletHeaderDivider",
       "walletCrumb",
       "addressHeaderDivider",
@@ -115,7 +150,8 @@
       "walletTitleCaret",
       "walletDeleteButton",
     ],
-    overview: ["walletsOverview", "walletGrid"],
+    overview: ["walletsOverview", "walletGrid", "overviewFaqButton"],
+    faq: ["faqView", "faqGrid"],
     detail: [
       "walletDetail",
       "walletSecondarySummary",
@@ -281,6 +317,7 @@
       banner: null,
       headerStatus: "",
       headerStatusTone: "default",
+      currentView: "watch",
       currentFactIndex: null,
       lastFactsWalletId: null,
       chartModalOpen: false,
@@ -455,7 +492,16 @@
       render();
     });
 
+    dom.overviewFaqButton.addEventListener("click", openFaq);
     dom.settingsButton.addEventListener("click", openSettingsModal);
+    dom.faqButton.addEventListener("click", () => {
+      if (isFaqView()) {
+        openOverview();
+        return;
+      }
+
+      openFaq();
+    });
     dom.settingsClearStorageButton.addEventListener("click", clearVault);
     dom.addressCrumb.addEventListener("click", copyActiveAddressToClipboard);
     dom.addressCrumb.addEventListener("keydown", (event) => {
@@ -1257,6 +1303,7 @@
     renderFooter();
     renderHeader();
     renderOverview();
+    renderFaq();
     renderDetail();
     renderSettingsModal();
     syncBodyModalState();
@@ -1293,12 +1340,15 @@
     const isEditing = Boolean(activeWallet && runtime.editingWalletId === activeWallet.id);
     const showCopyStatus =
       Boolean(activeAddress) && runtime.headerStatusTone === "success" && Boolean(runtime.headerStatus);
+    const faqOpen = isFaqView();
 
     dom.headerStatus.hidden = !runtime.headerStatus || showCopyStatus;
     dom.headerStatus.className = `topbar-status text-meta${
       runtime.headerStatusTone === "success" ? " is-success" : ""
     }`;
     dom.headerStatus.textContent = showCopyStatus ? "" : runtime.headerStatus || "";
+    dom.faqHeaderDivider.hidden = !faqOpen;
+    dom.faqCrumb.hidden = !faqOpen;
     dom.walletHeaderDivider.hidden = !activeWallet;
     dom.walletCrumb.hidden = !activeWallet;
     dom.addressHeaderDivider.hidden = !activeAddress;
@@ -1310,6 +1360,10 @@
     dom.walletTitleButton.classList.toggle("is-back", Boolean(activeAddress));
     dom.walletDeleteButton.hidden = !activeWallet || Boolean(activeAddress);
     dom.walletDeleteButton.disabled = !activeWallet || state.groups.length <= 1;
+    dom.faqButton.classList.toggle("is-active", faqOpen);
+    dom.faqButton.setAttribute("aria-pressed", String(faqOpen));
+    dom.faqButton.setAttribute("aria-label", faqOpen ? "Close FAQ" : "Open FAQ");
+    dom.faqButton.title = faqOpen ? "Close FAQ" : "FAQ";
 
     if (!activeWallet) {
       dom.walletTitleText.textContent = "";
@@ -1391,8 +1445,9 @@
 
   function renderOverview() {
     const activeWallet = getActiveWallet();
-    dom.walletsOverview.hidden = Boolean(activeWallet);
-    if (activeWallet) {
+    const faqOpen = isFaqView();
+    dom.walletsOverview.hidden = Boolean(activeWallet) || faqOpen;
+    if (activeWallet || faqOpen) {
       return;
     }
 
@@ -1409,11 +1464,22 @@
     dom.walletGrid.innerHTML = `${cards.join("")}${Array.from({ length: fillerCount }, () => buildWalletPlaceholderCard()).join("")}`;
   }
 
+  function renderFaq() {
+    const isOpen = isFaqView();
+    dom.faqView.hidden = !isOpen;
+    if (!isOpen) {
+      return;
+    }
+
+    dom.faqGrid.innerHTML = FAQ_ITEMS.map((item) => buildFaqCard(item)).join("");
+  }
+
   function renderDetail() {
     const activeWallet = getActiveWallet();
     const activeAddress = getActiveAddress();
-    dom.walletDetail.hidden = !activeWallet;
-    if (!activeWallet) {
+    const faqOpen = isFaqView();
+    dom.walletDetail.hidden = !activeWallet || faqOpen;
+    if (!activeWallet || faqOpen) {
       dom.walletFactsSection.hidden = true;
       runtime.lastFactsWalletId = null;
       clearAddressFeedback();
@@ -1729,6 +1795,17 @@
   function buildWalletPlaceholderCard() {
     return `
       <div class="wallet-card wallet-card--action wallet-card--placeholder" aria-hidden="true"></div>
+    `;
+  }
+
+  function buildFaqCard(item) {
+    return `
+      <article class="panel faq-card">
+        <div class="faq-card-copy">
+          <h3 class="faq-card-question">${escapeHtml(item.question)}</h3>
+          <p class="faq-card-answer">${escapeHtml(item.answer)}</p>
+        </div>
+      </article>
     `;
   }
 
@@ -2586,6 +2663,10 @@
     return getActiveAddress()?.id || getActiveWallet()?.id || null;
   }
 
+  function isFaqView() {
+    return runtime.currentView === "faq";
+  }
+
   function getVisibleTransactionCount(detailKey) {
     if (!detailKey) {
       return COLLAPSED_TRANSACTION_COUNT;
@@ -3047,7 +3128,7 @@
     runtime.expandedTechnicalTransactionTxid = null;
   }
 
-  function buildViewHash(walletId = null, addressId = null) {
+  function buildViewHash(view = "watch", walletId = null, addressId = null) {
     const params = new URLSearchParams();
     if (addressId && walletId) {
       params.set("view", "address");
@@ -3062,12 +3143,16 @@
       return `#${params.toString()}`;
     }
 
-    params.set("view", "watch");
+    params.set("view", view === "faq" ? "faq" : "watch");
     return `#${params.toString()}`;
   }
 
   function getCurrentViewHash() {
-    return buildViewHash(state.settings.activeWalletId || null, state.settings.activeAddressId || null);
+    return buildViewHash(
+      isFaqView() ? "faq" : "watch",
+      state.settings.activeWalletId || null,
+      state.settings.activeAddressId || null
+    );
   }
 
   function isLocalFigmaCaptureHost() {
@@ -3131,6 +3216,10 @@
     const walletId = params.get("wallet");
     const addressId = params.get("address");
 
+    if (view === "faq") {
+      return { view: "faq", walletId: null, addressId: null };
+    }
+
     if (view === "address" && addressId) {
       return { view: "address", walletId: walletId || null, addressId };
     }
@@ -3147,30 +3236,37 @@
   }
 
   function resolveViewRoute(route) {
+    if (route.view === "faq") {
+      return { view: "faq", walletId: null, addressId: null };
+    }
+
     if (route.view === "address" && route.addressId) {
       const address = state.addresses.find((entry) => entry.id === route.addressId);
       if (address) {
-        return { walletId: address.groupId, addressId: address.id };
+        return { view: "watch", walletId: address.groupId, addressId: address.id };
       }
     }
 
     if (route.view === "wallet" && route.walletId) {
       const wallet = state.groups.find((entry) => entry.id === route.walletId);
       if (wallet) {
-        return { walletId: wallet.id, addressId: null };
+        return { view: "watch", walletId: wallet.id, addressId: null };
       }
     }
 
-    return { walletId: null, addressId: null };
+    return { view: "watch", walletId: null, addressId: null };
   }
 
   function applyRouteFromHash({ replaceInvalid = false, renderAfter = true, preloadDetail = true } = {}) {
     const route = parseViewRouteFromHash();
     const resolved = resolveViewRoute(route);
+    const nextView = resolved.view === "faq" ? "faq" : "watch";
     const walletId = resolved.walletId || null;
     const addressId = resolved.addressId || null;
     const changed =
-      state.settings.activeWalletId !== walletId || state.settings.activeAddressId !== addressId;
+      state.settings.activeWalletId !== walletId ||
+      state.settings.activeAddressId !== addressId ||
+      runtime.currentView !== nextView;
 
     if (!changed) {
       if (replaceInvalid) {
@@ -3181,6 +3277,7 @@
 
     state.settings.activeWalletId = walletId;
     state.settings.activeAddressId = addressId;
+    runtime.currentView = nextView;
     resetViewTransientState();
     StorageLayer.saveState(state);
     clearAddressFeedback();
@@ -3197,6 +3294,20 @@
   }
 
   function openOverview() {
+    runtime.currentView = "watch";
+    state.settings.activeWalletId = null;
+    state.settings.activeAddressId = null;
+    resetViewTransientState();
+    StorageLayer.saveState(state);
+    clearAddressFeedback();
+    clearAddressTagFeedback();
+    resetAddressTagForm();
+    render();
+    syncViewRoute("push");
+  }
+
+  function openFaq() {
+    runtime.currentView = "faq";
     state.settings.activeWalletId = null;
     state.settings.activeAddressId = null;
     resetViewTransientState();
@@ -3214,6 +3325,7 @@
       return;
     }
 
+    runtime.currentView = "watch";
     state.settings.activeWalletId = wallet.id;
     state.settings.activeAddressId = null;
     resetViewTransientState();
@@ -3239,6 +3351,7 @@
     };
 
     state.groups.push(wallet);
+    runtime.currentView = "watch";
     state.settings.activeWalletId = wallet.id;
     state.settings.activeAddressId = null;
     resetViewTransientState();
@@ -3260,6 +3373,7 @@
       return;
     }
 
+    runtime.currentView = "watch";
     state.settings.activeWalletId = address.groupId;
     state.settings.activeAddressId = address.id;
     resetViewTransientState();
@@ -3649,7 +3763,9 @@
   }
 
   function syncViewModeClass() {
-    document.body.classList.toggle("is-watch-view", !getActiveWallet());
+    const faqOpen = isFaqView();
+    document.body.classList.toggle("is-watch-view", !getActiveWallet() && !faqOpen);
+    document.body.classList.toggle("is-faq-view", faqOpen);
   }
 
   // ---------------------------------------------------------------------------
