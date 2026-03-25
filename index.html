@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#070707" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src https://mempool.space https://blockstream.info https://api.exchange.coinbase.com https://api.coinbase.com; base-uri 'none'; form-action 'none';"
+    />
     <title>Bitkit Watch</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -12,27 +16,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="styles.css?v=20260325-header-footer-progressive-1" />
-    <script>
-      (() => {
-        const host = window.location.hostname;
-        const isLocalCaptureHost =
-          host === "localhost" ||
-          host === "0.0.0.0" ||
-          host === "::1" ||
-          host === "[::1]" ||
-          host.endsWith(".local") ||
-          /^127(?:\.\d{1,3}){3}$/.test(host);
-
-        if (!isLocalCaptureHost) {
-          return;
-        }
-
-        const script = document.createElement("script");
-        script.src = "https://mcp.figma.com/mcp/html-to-design/capture.js";
-        script.async = true;
-        document.head.appendChild(script);
-      })();
-    </script>
+    <script src="assets/figma-capture-loader.js" defer></script>
     <script src="assets/satoshi-demo-snapshot.js" defer></script>
     <script src="assets/bitcoin-facts.js" defer></script>
     <script src="app.js?v=20260325-faq-5" defer></script>
