@@ -73,10 +73,19 @@
     { name: "Mempool", baseUrl: "https://mempool.space/api" },
     { name: "Blockstream", baseUrl: "https://blockstream.info/api" },
   ];
+  const SUPPORTED_FIAT_CURRENCIES = Object.freeze(["USD", "EUR", "JPY", "GBP", "CNY"]);
+  const FIAT_DISPLAY_META = Object.freeze({
+    USD: { prefix: "$", icon: "$", fractionDigits: 2 },
+    EUR: { prefix: "€", icon: "€", fractionDigits: 2 },
+    JPY: { prefix: "¥", icon: "¥", fractionDigits: 0 },
+    GBP: { prefix: "£", icon: "£", fractionDigits: 2 },
+    CNY: { prefix: "CN¥", icon: "¥", fractionDigits: 2 },
+  });
   const DEFAULT_SETTINGS = Object.freeze({
     activeWalletId: null,
     activeAddressId: null,
     displayUnit: "BTC",
+    fiatCurrency: "USD",
     hideDust: true,
     bitcoinNotation: "MODERN",
     showBackgroundGraphics: true,
@@ -156,6 +165,13 @@
       "settingsBackgroundGraphicsButton",
       "settingsNotationModern",
       "settingsNotationClassic",
+      "settingsFiatIcon",
+      "settingsFiatNotice",
+      "settingsFiatUsd",
+      "settingsFiatEur",
+      "settingsFiatJpy",
+      "settingsFiatGbp",
+      "settingsFiatCny",
       "transactionModal",
       "transactionModalBackdrop",
       "transactionModalClose",
@@ -214,6 +230,9 @@
     bindEvents();
     render();
     syncViewRoute("replace");
+    if (getFiatCurrency() !== "USD") {
+      refreshFiatExchangeRatesInBackground();
+    }
     if (state.addresses.length) {
       refreshCurrentPriceInBackground();
     }
@@ -247,6 +266,11 @@
       hasLoadedOnce: false,
       historyScope: "SUMMARY",
       currentPriceUsd: null,
+      fiatExchangeRates: createDefaultFiatExchangeRates(),
+      currentPriceFiat: null,
+      currentPriceFiatCurrency: null,
+      fiatPriceHistory: new Map(),
+      fiatIntradayPriceHistory: new Map(),
       priceHistory: new Map(),
       intradayPriceHistory: new Map(),
       historyAvailable: true,
@@ -384,6 +408,10 @@
 
   function createDefaultSettings() {
     return { ...DEFAULT_SETTINGS };
+  }
+
+  function createDefaultFiatExchangeRates() {
+    return new Map([["USD", 1]]);
   }
 
   function cacheDom() {
@@ -788,6 +816,32 @@
         render();
       });
     });
+    [
+      dom.settingsFiatUsd,
+      dom.settingsFiatEur,
+      dom.settingsFiatJpy,
+      dom.settingsFiatGbp,
+      dom.settingsFiatCny,
+    ].forEach((input) => {
+      input.addEventListener("change", () => {
+        if (!input.checked || !input.dataset.fiat) {
+          return;
+        }
+
+        const nextFiat = normalizeFiatCurrency(input.dataset.fiat);
+        if (state.settings.fiatCurrency === nextFiat) {
+          return;
+        }
+
+        state.settings.fiatCurrency = nextFiat;
+        StorageLayer.saveState(state);
+        render();
+
+        if (nextFiat !== "USD" && !Number.isFinite(getFiatExchangeRate(nextFiat))) {
+          refreshFiatExchangeRatesInBackground();
+        }
+      });
+    });
 
     dom.transactionModalBackdrop.addEventListener("click", closeTransactionDetail);
     dom.transactionModalClose.addEventListener("click", closeTransactionDetail);
@@ -883,7 +937,11 @@
           ? getHistoryStartTimestampFromAddressResults(addressResults) ||
             startOfUtcDay(Date.now() - (ONE_YEAR_DAYS - 1) * DAY_MS)
           : startTimestamp;
-      const marketData = await APILayer.fetchMarketData(effectiveStartTimestamp, endTimestamp);
+      const marketData = await APILayer.fetchMarketData(
+        effectiveStartTimestamp,
+        endTimestamp,
+        getFiatCurrency()
+      );
       const rateLimitWarnings = collectRateLimitWarningsFromSettledResults(addressResults);
 
       const snapshots = [];
@@ -951,6 +1009,19 @@
         isRefreshing: false,
         hasLoadedOnce: true,
         currentPriceUsd: marketData.currentPriceUsd,
+        fiatExchangeRates: mergeFiatExchangeRates(marketData.fiatExchangeRates, runtime.fiatExchangeRates),
+        currentPriceFiat: Number.isFinite(marketData.displayFiatMarket?.currentPrice)
+          ? marketData.displayFiatMarket.currentPrice
+          : null,
+        currentPriceFiatCurrency: marketData.displayFiatMarket?.currency || null,
+        fiatPriceHistory:
+          marketData.displayFiatMarket?.priceHistory instanceof Map
+            ? marketData.displayFiatMarket.priceHistory
+            : new Map(),
+        fiatIntradayPriceHistory:
+          marketData.displayFiatMarket?.intradayPriceHistory instanceof Map
+            ? marketData.displayFiatMarket.intradayPriceHistory
+            : new Map(),
         priceHistory: marketData.priceHistory,
         intradayPriceHistory: marketData.intradayPriceHistory,
         historyAvailable: marketData.historyAvailable,
@@ -1047,7 +1118,11 @@
         requestedHistoryScope === "ALL"
           ? getHistoryStartTimestampFromAddressResults(addressResults) || startTimestamp
           : startTimestamp;
-      const marketData = await APILayer.fetchMarketData(effectiveStartTimestamp, endTimestamp);
+      const marketData = await APILayer.fetchMarketData(
+        effectiveStartTimestamp,
+        endTimestamp,
+        getFiatCurrency()
+      );
       const rateLimitWarnings = collectRateLimitWarningsFromSettledResults(addressResults);
 
       const snapshots = [];
@@ -1111,6 +1186,19 @@
         isRefreshing: silent ? runtime.isRefreshing : false,
         hasLoadedOnce: true,
         currentPriceUsd: marketData.currentPriceUsd,
+        fiatExchangeRates: mergeFiatExchangeRates(marketData.fiatExchangeRates, runtime.fiatExchangeRates),
+        currentPriceFiat: Number.isFinite(marketData.displayFiatMarket?.currentPrice)
+          ? marketData.displayFiatMarket.currentPrice
+          : null,
+        currentPriceFiatCurrency: marketData.displayFiatMarket?.currency || null,
+        fiatPriceHistory:
+          marketData.displayFiatMarket?.priceHistory instanceof Map
+            ? marketData.displayFiatMarket.priceHistory
+            : new Map(),
+        fiatIntradayPriceHistory:
+          marketData.displayFiatMarket?.intradayPriceHistory instanceof Map
+            ? marketData.displayFiatMarket.intradayPriceHistory
+            : new Map(),
         priceHistory: marketData.priceHistory,
         intradayPriceHistory: marketData.intradayPriceHistory,
         historyAvailable: marketData.historyAvailable,
@@ -1196,7 +1284,7 @@
     }
 
     dom.appFooterPriceReference.textContent = getFooterBitcoinReferenceDisplay();
-    dom.appFooterPriceValue.textContent = formatFooterUsdValue(runtime.currentPriceUsd);
+    dom.appFooterPriceValue.textContent = formatDisplayFiatFooterValue(getCurrentDisplayFiatUnitPrice());
   }
 
   function renderHeader() {
@@ -1264,6 +1352,8 @@
     }
 
     const isModern = normalizeBitcoinNotation(state.settings.bitcoinNotation) === "MODERN";
+    const fiatCurrency = getFiatCurrency();
+    const showFiatApproximationNotice = fiatCurrency !== "USD" && !getDirectFiatProductId(fiatCurrency);
     const showDust = !Boolean(state.settings.hideDust);
     const showBackgroundGraphics = state.settings.showBackgroundGraphics !== false;
 
@@ -1274,6 +1364,13 @@
 
     dom.settingsNotationModern.checked = isModern;
     dom.settingsNotationClassic.checked = !isModern;
+    dom.settingsFiatIcon.textContent = getFiatIconGlyph(fiatCurrency);
+    dom.settingsFiatNotice.hidden = !showFiatApproximationNotice;
+    dom.settingsFiatUsd.checked = fiatCurrency === "USD";
+    dom.settingsFiatEur.checked = fiatCurrency === "EUR";
+    dom.settingsFiatJpy.checked = fiatCurrency === "JPY";
+    dom.settingsFiatGbp.checked = fiatCurrency === "GBP";
+    dom.settingsFiatCny.checked = fiatCurrency === "CNY";
   }
 
   function syncBodyModalState() {
@@ -2691,7 +2788,7 @@
     const hadCoverage = hasScopeCoverage(runtime.historyScope, normalizedScope);
     const [addressResult, marketData] = await Promise.all([
       APILayer.fetchAddressBundle(entry.address, startTimestamp),
-      APILayer.fetchMarketData(startTimestamp, endTimestamp),
+      APILayer.fetchMarketData(startTimestamp, endTimestamp, getFiatCurrency()),
     ]);
 
     const snapshot = PortfolioLayer.buildAddressSnapshot({
@@ -2707,6 +2804,19 @@
 
     upsertAddressSnapshot(snapshot);
     runtime.currentPriceUsd = marketData.currentPriceUsd;
+    runtime.fiatExchangeRates = mergeFiatExchangeRates(marketData.fiatExchangeRates, runtime.fiatExchangeRates);
+    runtime.currentPriceFiat = Number.isFinite(marketData.displayFiatMarket?.currentPrice)
+      ? marketData.displayFiatMarket.currentPrice
+      : null;
+    runtime.currentPriceFiatCurrency = marketData.displayFiatMarket?.currency || null;
+    runtime.fiatPriceHistory =
+      marketData.displayFiatMarket?.priceHistory instanceof Map
+        ? marketData.displayFiatMarket.priceHistory
+        : new Map();
+    runtime.fiatIntradayPriceHistory =
+      marketData.displayFiatMarket?.intradayPriceHistory instanceof Map
+        ? marketData.displayFiatMarket.intradayPriceHistory
+        : new Map();
     if (!hadCoverage) {
       runtime.priceHistory = marketData.priceHistory;
     }
@@ -2755,16 +2865,39 @@
     }
 
     try {
-      const quote = await APILayer.fetchCurrentPriceUsd();
+      const selectedFiatCurrency = getFiatCurrency();
+      const directFiatProductId = getDirectFiatProductId(selectedFiatCurrency);
+      const [quote, fiatExchangeRates, directFiatQuote] = await Promise.all([
+        APILayer.fetchCurrentPriceUsd(),
+        APILayer.fetchFiatExchangeRates().catch(() => null),
+        directFiatProductId ? fetchCurrentProductQuote(directFiatProductId).catch(() => null) : null,
+      ]);
       if (!Number.isFinite(quote?.price)) {
         return;
       }
 
-      if (runtime.currentPriceUsd === quote.price) {
+      const normalizedRates =
+        fiatExchangeRates instanceof Map
+          ? normalizeFiatExchangeRates(fiatExchangeRates)
+          : runtime.fiatExchangeRates;
+      const priceUnchanged = runtime.currentPriceUsd === quote.price;
+      const ratesUnchanged = areNumberMapsEqual(runtime.fiatExchangeRates, normalizedRates);
+      const directPrice = Number.isFinite(directFiatQuote?.price) ? directFiatQuote.price : null;
+      const directPriceUnchanged =
+        runtime.currentPriceFiat === directPrice &&
+        runtime.currentPriceFiatCurrency === (Number.isFinite(directPrice) ? selectedFiatCurrency : null);
+      if (priceUnchanged && ratesUnchanged && directPriceUnchanged) {
         return;
       }
 
       runtime.currentPriceUsd = quote.price;
+      runtime.fiatExchangeRates = normalizedRates;
+      runtime.currentPriceFiat = directPrice;
+      runtime.currentPriceFiatCurrency = Number.isFinite(directPrice) ? selectedFiatCurrency : null;
+      if (!Number.isFinite(directPrice)) {
+        runtime.fiatPriceHistory = new Map();
+        runtime.fiatIntradayPriceHistory = new Map();
+      }
       runtime.addressSnapshots = runtime.addressSnapshots.map((snapshot) => ({
         ...snapshot,
         usdValue: (Number(snapshot.balanceSats || 0) / 1e8) * quote.price,
@@ -2777,6 +2910,76 @@
       render();
     } catch (error) {
       // Keep the cached price if the lightweight live quote refresh fails.
+    }
+  }
+
+  async function refreshFiatExchangeRatesInBackground() {
+    const fiatCurrency = getFiatCurrency();
+    if (fiatCurrency === "USD") {
+      const hadDirectFiatState =
+        runtime.currentPriceFiatCurrency !== null ||
+        (runtime.fiatPriceHistory instanceof Map && runtime.fiatPriceHistory.size > 0) ||
+        (runtime.fiatIntradayPriceHistory instanceof Map && runtime.fiatIntradayPriceHistory.size > 0);
+      runtime.currentPriceFiat = null;
+      runtime.currentPriceFiatCurrency = null;
+      runtime.fiatPriceHistory = new Map();
+      runtime.fiatIntradayPriceHistory = new Map();
+      if (hadDirectFiatState) {
+        render();
+      }
+      return;
+    }
+
+    try {
+      const historyStart = Number.isFinite(runtime.timelineStart)
+        ? runtime.timelineStart
+        : startOfUtcDay(Date.now() - 29 * DAY_MS);
+      const historyEnd = Number.isFinite(runtime.timelineEnd) ? runtime.timelineEnd : Date.now();
+      const intradayStart = Number.isFinite(runtime.intradayStart)
+        ? runtime.intradayStart
+        : startOfUtcHour(Date.now() - 23 * HOUR_MS);
+      const intradayEnd = Number.isFinite(runtime.intradayEnd) ? runtime.intradayEnd : Date.now();
+      const [nextRatesRaw, displayFiatMarket] = await Promise.all([
+        APILayer.fetchFiatExchangeRates().catch(() => null),
+        fetchDirectFiatMarketData(fiatCurrency, historyStart, historyEnd, {
+          intradayStart,
+          intradayEnd,
+        }).catch(() => null),
+      ]);
+
+      const nextRates =
+        nextRatesRaw instanceof Map ? normalizeFiatExchangeRates(nextRatesRaw) : runtime.fiatExchangeRates;
+      const ratesUnchanged = areNumberMapsEqual(runtime.fiatExchangeRates, nextRates);
+      const directPrice = Number.isFinite(displayFiatMarket?.currentPrice)
+        ? displayFiatMarket.currentPrice
+        : null;
+      const nextFiatHistory =
+        displayFiatMarket?.priceHistory instanceof Map ? displayFiatMarket.priceHistory : new Map();
+      const nextFiatIntradayHistory =
+        displayFiatMarket?.intradayPriceHistory instanceof Map
+          ? displayFiatMarket.intradayPriceHistory
+          : new Map();
+      const directUnchanged =
+        runtime.currentPriceFiat === directPrice &&
+        runtime.currentPriceFiatCurrency === (displayFiatMarket?.currency || null) &&
+        areNumberMapsEqual(runtime.fiatPriceHistory, nextFiatHistory) &&
+        areNumberMapsEqual(runtime.fiatIntradayPriceHistory, nextFiatIntradayHistory);
+
+      if (ratesUnchanged && directUnchanged) {
+        return;
+      }
+
+      runtime.fiatExchangeRates = nextRates;
+      runtime.currentPriceFiat = directPrice;
+      runtime.currentPriceFiatCurrency = displayFiatMarket?.currency || null;
+      runtime.fiatPriceHistory = nextFiatHistory;
+      runtime.fiatIntradayPriceHistory = nextFiatIntradayHistory;
+      if (runtime.addressSnapshots.length) {
+        StorageLayer.saveRuntimeCache(runtime);
+      }
+      render();
+    } catch (error) {
+      // Keep existing FX rates if the background refresh fails.
     }
   }
 
@@ -3431,11 +3634,12 @@
 
   function syncDisplayModeToggle() {
     const displayUnit = getDisplayUnit();
-    const nextUnit = displayUnit === "BTC" ? "USD" : "BTC";
-    const currentUnitLabel = displayUnit === "BTC" ? getBitcoinDisplayPrefix() : "$";
+    const nextUnit = displayUnit === "BTC" ? getFiatCurrency() : "BTC";
+    const currentUnitLabel = displayUnit === "BTC" ? getBitcoinDisplayPrefix() : getFiatDisplayPrefix();
+    const currentUnitName = displayUnit === "BTC" ? "BTC" : getFiatCurrency();
     dom.unitDisplayButtonLabel.textContent = currentUnitLabel;
     dom.unitDisplayButton.classList.toggle("has-long-label", currentUnitLabel.length > 1);
-    dom.unitDisplayButton.setAttribute("aria-label", `Primary display unit: ${displayUnit}`);
+    dom.unitDisplayButton.setAttribute("aria-label", `Primary display unit: ${currentUnitName}`);
     dom.unitDisplayButton.setAttribute("aria-pressed", String(displayUnit === "USD"));
     dom.unitDisplayButton.title = `Switch primary display to ${nextUnit}`;
   }
@@ -3503,6 +3707,7 @@
     if (!["BTC", "USD"].includes(state.settings.displayUnit)) {
       state.settings.displayUnit = "BTC";
     }
+    state.settings.fiatCurrency = normalizeFiatCurrency(state.settings.fiatCurrency);
     state.settings.hideDust =
       typeof state.settings.hideDust === "boolean" ? state.settings.hideDust : true;
     state.settings.bitcoinNotation = normalizeBitcoinNotation(state.settings.bitcoinNotation);
@@ -3659,6 +3864,7 @@
         displayUnit: ["BTC", "USD"].includes(currentState.settings.displayUnit)
           ? currentState.settings.displayUnit
           : "BTC",
+        fiatCurrency: normalizeFiatCurrency(currentState.settings.fiatCurrency),
         hideDust: Boolean(currentState.settings.hideDust),
         bitcoinNotation: normalizeBitcoinNotation(currentState.settings.bitcoinNotation),
         showBackgroundGraphics: currentState.settings.showBackgroundGraphics !== false,
@@ -3698,6 +3904,7 @@
         (candidate.settings.displayUnit === "BTC" || candidate.settings.displayUnit === "USD")
           ? candidate.settings.displayUnit
           : "BTC",
+      fiatCurrency: normalizeFiatCurrency(candidate.settings?.fiatCurrency),
       hideDust: typeof candidate.settings?.hideDust === "boolean" ? candidate.settings.hideDust : true,
       bitcoinNotation: normalizeBitcoinNotation(candidate.settings?.bitcoinNotation),
       showBackgroundGraphics:
@@ -3758,6 +3965,7 @@
       currentPriceUsd: Number.isFinite(currentRuntime.currentPriceUsd)
         ? currentRuntime.currentPriceUsd
         : null,
+      fiatExchangeRates: serializeNumberMap(currentRuntime.fiatExchangeRates),
       priceHistory: serializeNumberMap(currentRuntime.priceHistory),
       intradayPriceHistory: includeIntradayPriceHistory
         ? serializeNumberMap(currentRuntime.intradayPriceHistory)
@@ -3809,6 +4017,7 @@
     return {
       historyScope: normalizeHistoryScope(candidate.historyScope),
       currentPriceUsd: Number.isFinite(candidate.currentPriceUsd) ? candidate.currentPriceUsd : null,
+      fiatExchangeRates: normalizeFiatExchangeRates(candidate.fiatExchangeRates),
       priceHistory: deserializeNumberMap(candidate.priceHistory),
       intradayPriceHistory: deserializeNumberMap(candidate.intradayPriceHistory),
       historyAvailable: candidate.historyAvailable !== false,
@@ -3867,6 +4076,48 @@
       }
     });
     return map;
+  }
+
+  function normalizeFiatExchangeRates(source) {
+    const map = createDefaultFiatExchangeRates();
+    const candidate = source instanceof Map ? source : deserializeNumberMap(source);
+
+    SUPPORTED_FIAT_CURRENCIES.forEach((currency) => {
+      if (currency === "USD") {
+        return;
+      }
+
+      const rate = candidate.get(currency);
+      if (Number.isFinite(rate) && rate > 0) {
+        map.set(currency, rate);
+      }
+    });
+
+    return map;
+  }
+
+  function mergeFiatExchangeRates(preferred, fallback) {
+    const merged = normalizeFiatExchangeRates(fallback);
+    normalizeFiatExchangeRates(preferred).forEach((value, key) => {
+      merged.set(key, value);
+    });
+    return merged;
+  }
+
+  function areNumberMapsEqual(left, right) {
+    const normalizedLeft = left instanceof Map ? left : new Map();
+    const normalizedRight = right instanceof Map ? right : new Map();
+    if (normalizedLeft.size !== normalizedRight.size) {
+      return false;
+    }
+
+    for (const [key, value] of normalizedLeft.entries()) {
+      if (normalizedRight.get(key) !== value) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   function serializeTxEvents(
@@ -4556,14 +4807,30 @@
       return fetchCurrentPriceQuote();
     },
 
-    async fetchMarketData(startTimestamp, endTimestamp) {
+    async fetchFiatExchangeRates() {
+      return fetchFiatExchangeRates();
+    },
+
+    async fetchMarketData(startTimestamp, endTimestamp, displayFiatCurrency = "USD") {
       let currentPrice = null;
       let currentPriceError = null;
-      try {
-        currentPrice = await fetchCurrentPriceQuote();
-      } catch (error) {
-        currentPriceError = error;
+      let fiatExchangeRates = createDefaultFiatExchangeRates();
+      const [currentPriceResult, fiatExchangeRatesResult, displayFiatMarketResult] =
+        await Promise.allSettled([
+        fetchCurrentPriceQuote(),
+        fetchFiatExchangeRates(),
+        fetchDirectFiatMarketData(displayFiatCurrency, startTimestamp, endTimestamp),
+      ]);
+      if (currentPriceResult.status === "fulfilled") {
+        currentPrice = currentPriceResult.value;
+      } else {
+        currentPriceError = currentPriceResult.reason;
       }
+      if (fiatExchangeRatesResult.status === "fulfilled") {
+        fiatExchangeRates = fiatExchangeRatesResult.value;
+      }
+      const displayFiatMarket =
+        displayFiatMarketResult.status === "fulfilled" ? displayFiatMarketResult.value : null;
 
       let priceHistory = new Map();
       let historyAvailable = true;
@@ -4605,6 +4872,8 @@
 
       return {
         currentPriceUsd: currentPrice.price,
+        fiatExchangeRates,
+        displayFiatMarket,
         priceHistory,
         intradayPriceHistory,
         intradayStart,
@@ -4617,19 +4886,27 @@
   };
 
   function fetchCurrentPriceQuote() {
+    return fetchCurrentProductQuote("BTC-USD");
+  }
+
+  function fetchCurrentProductQuote(productId) {
+    const quoteCurrency = getProductQuoteCurrency(productId);
     return withFallback(
       [
         async () => {
           const response = await fetchJson(
-            "https://api.exchange.coinbase.com/products/BTC-USD/ticker",
+            `https://api.exchange.coinbase.com/products/${encodeURIComponent(productId)}/ticker`,
             { providerName: "Coinbase Exchange" }
           );
           return { provider: "Coinbase Exchange", price: Number(response.price) };
         },
         async () => {
-          const response = await fetchJson("https://api.coinbase.com/v2/prices/BTC-USD/spot", {
-            providerName: "Coinbase Spot",
-          });
+          const response = await fetchJson(
+            `https://api.coinbase.com/v2/prices/${encodeURIComponent(productId)}/spot`,
+            {
+              providerName: "Coinbase Spot",
+            }
+          );
           return { provider: "Coinbase Spot", price: Number(response.data.amount) };
         },
         async () => {
@@ -4637,11 +4914,36 @@
             "https://api.coinbase.com/v2/exchange-rates?currency=BTC",
             { providerName: "Coinbase Rates" }
           );
-          return { provider: "Coinbase Rates", price: Number(response.data.rates.USD) };
+          return { provider: "Coinbase Rates", price: Number(response.data.rates[quoteCurrency]) };
         },
       ],
-      "Current BTC/USD price unavailable."
+      `Current ${productId} price unavailable.`
     );
+  }
+
+  async function fetchFiatExchangeRates() {
+    const response = await fetchJson("https://api.coinbase.com/v2/exchange-rates?currency=BTC", {
+      providerName: "Coinbase Rates",
+    });
+    const btcRates = response?.data?.rates || {};
+    const usdPerBtc = Number(btcRates.USD);
+    if (!Number.isFinite(usdPerBtc) || usdPerBtc <= 0) {
+      throw new Error("Current fiat exchange rates unavailable.");
+    }
+
+    const nextRates = createDefaultFiatExchangeRates();
+    SUPPORTED_FIAT_CURRENCIES.forEach((currency) => {
+      if (currency === "USD") {
+        return;
+      }
+
+      const quote = Number(btcRates[currency]);
+      if (Number.isFinite(quote) && quote > 0) {
+        nextRates.set(currency, quote / usdPerBtc);
+      }
+    });
+
+    return nextRates;
   }
 
   async function fetchAddressSummaryFromProvider(provider, address) {
@@ -4716,11 +5018,15 @@
   }
 
   async function fetchHistoricalPriceSeries(startTimestamp, endTimestamp) {
+    return fetchProductHistoricalPriceSeries("BTC-USD", startTimestamp, endTimestamp);
+  }
+
+  async function fetchProductHistoricalPriceSeries(productId, startTimestamp, endTimestamp) {
     const requests = buildCandleRequests(startTimestamp, endTimestamp, 295);
     const candleResponses = await Promise.allSettled(
       requests.map((request) =>
         fetchJson(
-          `https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=86400&start=${encodeURIComponent(
+          `https://api.exchange.coinbase.com/products/${encodeURIComponent(productId)}/candles?granularity=86400&start=${encodeURIComponent(
             new Date(request.start).toISOString()
           )}&end=${encodeURIComponent(new Date(request.end).toISOString())}`
         )
@@ -4764,7 +5070,7 @@
       for (const dateKey of pendingSpotDates) {
         try {
           const response = await fetchJson(
-            `https://api.coinbase.com/v2/prices/BTC-USD/spot?date=${encodeURIComponent(dateKey)}`
+            `https://api.coinbase.com/v2/prices/${encodeURIComponent(productId)}/spot?date=${encodeURIComponent(dateKey)}`
           );
           closeByDay.set(dateKey, Number(response.data.amount));
         } catch (error) {
@@ -4792,8 +5098,12 @@
   }
 
   async function fetchIntradayPriceSeries(startTimestamp, endTimestamp, fallbackPrice) {
+    return fetchProductIntradayPriceSeries("BTC-USD", startTimestamp, endTimestamp, fallbackPrice);
+  }
+
+  async function fetchProductIntradayPriceSeries(productId, startTimestamp, endTimestamp, fallbackPrice) {
     const response = await fetchJson(
-      `https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=3600&start=${encodeURIComponent(
+      `https://api.exchange.coinbase.com/products/${encodeURIComponent(productId)}/candles?granularity=3600&start=${encodeURIComponent(
         new Date(startTimestamp).toISOString()
       )}&end=${encodeURIComponent(new Date(endTimestamp).toISOString())}`
     );
@@ -4816,6 +5126,72 @@
     }
 
     return closeByHour;
+  }
+
+  async function fetchDirectFiatMarketData(
+    fiatCurrency,
+    startTimestamp,
+    endTimestamp,
+    {
+      intradayStart = startOfUtcHour(Date.now() - 23 * HOUR_MS),
+      intradayEnd = Date.now(),
+    } = {}
+  ) {
+    const normalizedFiat = normalizeFiatCurrency(fiatCurrency);
+    const productId = getDirectFiatProductId(normalizedFiat);
+    if (!productId) {
+      return null;
+    }
+
+    let currentPrice = null;
+    let currentPriceError = null;
+    try {
+      currentPrice = await fetchCurrentProductQuote(productId);
+    } catch (error) {
+      currentPriceError = error;
+    }
+
+    let priceHistory = new Map();
+    try {
+      const historyResult = await fetchProductHistoricalPriceSeries(productId, startTimestamp, endTimestamp);
+      priceHistory = historyResult.series;
+    } catch (error) {
+      priceHistory = new Map();
+    }
+
+    if ((!currentPrice || !Number.isFinite(currentPrice.price)) && priceHistory.size) {
+      currentPrice = {
+        provider: "Historical close fallback",
+        price: getLastFinitePriceFromHistory(priceHistory),
+      };
+    }
+
+    if (!currentPrice || !Number.isFinite(currentPrice.price)) {
+      throw new Error(currentPriceError?.message || `Current ${productId} price unavailable.`);
+    }
+
+    let intradayPriceHistory = new Map();
+    try {
+      intradayPriceHistory = await fetchProductIntradayPriceSeries(
+        productId,
+        intradayStart,
+        intradayEnd,
+        currentPrice.price
+      );
+    } catch (error) {
+      intradayPriceHistory = new Map();
+    }
+
+    return {
+      currency: normalizedFiat,
+      productId,
+      currentPrice: currentPrice.price,
+      priceHistory,
+      intradayPriceHistory,
+      intradayStart,
+      intradayEnd,
+      provider: currentPrice.provider,
+    };
   }
 
   function buildCandleRequests(startTimestamp, endTimestamp, maxDaysPerRequest) {
@@ -5461,15 +5837,13 @@
     }
     const values = points.map((point) =>
       getDisplayUnit() === "USD"
-        ? Number.isFinite(point.usdValue)
-          ? point.usdValue
-          : Number.isFinite(runtime.currentPriceUsd)
-            ? point.btcHoldings * runtime.currentPriceUsd
-            : null
+        ? getPointDisplayFiatValue(point, {
+            preferIntraday: true,
+          })
         : point.btcHoldings
     );
     return createWalletCardMiniChartScene({
-      key: `${walletId}-wallet-card-chart-1d-${getDisplayUnit().toLowerCase()}`,
+      key: `${walletId}-wallet-card-chart-1d-${getDisplayChartUnitKey()}`,
       values,
       width: 464,
       height: 152,
@@ -5812,7 +6186,7 @@
     }
 
     if (getDisplayUnit() === "USD") {
-      return `$${formatCompactAxisNumber(value)}`;
+      return `${getFiatDisplayPrefix()}${formatCompactAxisNumber(value)}`;
     }
 
     return `${getBitcoinDisplayPrefix()} ${
@@ -5824,16 +6198,18 @@
 
   function formatCompactAxisNumber(value) {
     const absolute = Math.abs(value);
+    const maximumFractionDigits = getFiatFractionDigits() === 0 ? 0 : 2;
     if (absolute >= 1000) {
       return new Intl.NumberFormat("en-US", {
         notation: "compact",
-        maximumFractionDigits: absolute >= 100000 ? 0 : 1,
+        maximumFractionDigits: maximumFractionDigits === 0 ? 0 : absolute >= 100000 ? 0 : 1,
       }).format(value);
     }
 
     return new Intl.NumberFormat("en-US", {
       minimumFractionDigits: 0,
-      maximumFractionDigits: absolute < 10 ? 2 : 0,
+      maximumFractionDigits:
+        maximumFractionDigits === 0 ? 0 : absolute < 10 ? Math.min(2, maximumFractionDigits) : 0,
     }).format(value);
   }
 
@@ -5900,7 +6276,7 @@
 
   function formatSparklineTooltipValue(value) {
     if (getDisplayUnit() === "USD") {
-      return formatUsdDisplay(value, state.hideBalances);
+      return formatDisplayFiatValue(value, state.hideBalances);
     }
 
     return formatWalletBtc(value, state.hideBalances);
@@ -6235,29 +6611,136 @@
   }
 
   function buildSignedUsdMarkup(value, hidden) {
+    const convertedValue = convertUsdValueToFiat(value);
+    const prefix = getFiatDisplayPrefix();
+
     if (hidden) {
       if (value > 0) {
-        return `<span class="transaction-amount-sign">+</span> $ ••••••`;
+        return `<span class="transaction-amount-sign">+</span> ${escapeHtml(prefix)} ••••••`;
       }
       if (value < 0) {
-        return `<span class="transaction-amount-sign">-</span> $ ••••••`;
+        return `<span class="transaction-amount-sign">-</span> ${escapeHtml(prefix)} ••••••`;
       }
-      return "$ ••••••";
+      return `${escapeHtml(prefix)} ••••••`;
     }
 
-    if (!Number.isFinite(value)) {
-      return "$ --";
+    if (!Number.isFinite(convertedValue)) {
+      return `${escapeHtml(prefix)} --`;
     }
 
     const sign = value > 0 ? "+" : value < 0 ? "-" : "";
-    const formatted = new Intl.NumberFormat("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(Math.abs(value));
+    const formatted = formatFiatNumber(Math.abs(convertedValue), {
+      minimumFractionDigits: getFiatFractionDigits(),
+      maximumFractionDigits: getFiatFractionDigits(),
+    });
 
     return sign
-      ? `<span class="transaction-amount-sign">${escapeHtml(sign)}</span> $ ${escapeHtml(formatted)}`
-      : `$ ${escapeHtml(formatted)}`;
+      ? `<span class="transaction-amount-sign">${escapeHtml(sign)}</span> ${escapeHtml(prefix)} ${escapeHtml(formatted)}`
+      : `${escapeHtml(prefix)} ${escapeHtml(formatted)}`;
+  }
+
+  function buildSignedDisplayFiatMarkup(value, signValue, hidden) {
+    const prefix = getFiatDisplayPrefix();
+    const sign = signValue > 0 ? "+" : signValue < 0 ? "-" : "";
+
+    if (hidden) {
+      return sign
+        ? `<span class="transaction-amount-sign">${escapeHtml(sign)}</span> ${escapeHtml(prefix)} ••••••`
+        : `${escapeHtml(prefix)} ••••••`;
+    }
+
+    if (!Number.isFinite(value)) {
+      return `${escapeHtml(prefix)} --`;
+    }
+
+    const formatted = formatFiatNumber(Math.abs(value), {
+      minimumFractionDigits: getFiatFractionDigits(),
+      maximumFractionDigits: getFiatFractionDigits(),
+    });
+
+    return sign
+      ? `<span class="transaction-amount-sign">${escapeHtml(sign)}</span> ${escapeHtml(prefix)} ${escapeHtml(formatted)}`
+      : `${escapeHtml(prefix)} ${escapeHtml(formatted)}`;
+  }
+
+  function formatDisplayFiatValue(value, hidden) {
+    return formatFiatWithOptions(value, hidden, {
+      minimumFractionDigits:
+        getFiatFractionDigits() === 0 ? 0 : Math.abs(Number(value) || 0) < 1000 ? 2 : 0,
+      maximumFractionDigits: getFiatFractionDigits(),
+    });
+  }
+
+  function formatDisplayFiatTransactionValue(value, hidden) {
+    return formatFiatWithOptions(value, hidden, {
+      minimumFractionDigits: getFiatFractionDigits(),
+      maximumFractionDigits: getFiatFractionDigits(),
+    });
+  }
+
+  function formatDisplayFiatMetricValue(value, hidden) {
+    return formatFiatWithOptions(value, hidden, {
+      minimumFractionDigits: getFiatFractionDigits(),
+      maximumFractionDigits: getFiatFractionDigits(),
+      spaceAfterPrefix: false,
+      hiddenDigits: "••••",
+      missingDigits: "--",
+    });
+  }
+
+  function formatDisplayFiatFooterValue(value) {
+    return formatFiatWithOptions(value, false, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+      spaceAfterPrefix: false,
+      missingDigits: "--",
+    });
+  }
+
+  function formatFiatWithOptions(
+    value,
+    hidden,
+    {
+      minimumFractionDigits = 0,
+      maximumFractionDigits = getFiatFractionDigits(),
+      spaceAfterPrefix = true,
+      hiddenDigits = "••••••",
+      missingDigits = "--",
+    } = {}
+  ) {
+    const prefix = getFiatDisplayPrefix();
+    const gap = spaceAfterPrefix ? " " : "";
+    if (hidden) {
+      return `${prefix}${gap}${hiddenDigits}`;
+    }
+
+    if (!Number.isFinite(value)) {
+      return `${prefix}${gap}${missingDigits}`;
+    }
+
+    return `${prefix}${gap}${formatFiatNumber(value, {
+      minimumFractionDigits,
+      maximumFractionDigits,
+    })}`;
+  }
+
+  function formatFiatNumber(
+    value,
+    {
+      minimumFractionDigits = 0,
+      maximumFractionDigits = getFiatFractionDigits(),
+      notation = "standard",
+    } = {}
+  ) {
+    if (!Number.isFinite(value)) {
+      return "";
+    }
+
+    return new Intl.NumberFormat("en-US", {
+      notation,
+      minimumFractionDigits,
+      maximumFractionDigits,
+    }).format(value);
   }
 
   function formatWalletBtc(value, hidden) {
@@ -6300,32 +6783,11 @@
   }
 
   function formatUsdDisplay(value, hidden) {
-    if (hidden) {
-      return "$ ••••••";
-    }
-    if (!Number.isFinite(value)) {
-      return "$ --";
-    }
-
-    const formatted = new Intl.NumberFormat("en-US", {
-      minimumFractionDigits: value < 1000 ? 2 : 0,
-      maximumFractionDigits: 2,
-    }).format(value);
-
-    return `$ ${formatted}`;
+    return formatDisplayFiatValue(convertUsdValueToFiat(value), hidden);
   }
 
   function formatTransactionUsd(value, hidden) {
-    if (hidden) {
-      return "$ ••••••";
-    }
-    if (!Number.isFinite(value)) {
-      return "$ --";
-    }
-    return `$ ${new Intl.NumberFormat("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(value)}`;
+    return formatDisplayFiatTransactionValue(convertUsdValueToFiat(value), hidden);
   }
 
   function formatTransactionBtc(value, hidden) {
@@ -6361,14 +6823,7 @@
   }
 
   function formatFooterUsdValue(value) {
-    if (!Number.isFinite(value)) {
-      return "$--";
-    }
-
-    return `$${new Intl.NumberFormat("en-US", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(value)}`;
+    return formatDisplayFiatFooterValue(convertUsdValueToFiat(value));
   }
 
   function formatTechnicalFee(feeSats, hidden) {
@@ -6412,15 +6867,25 @@
 
   function getOverviewBalance(totalBtc, totalUsd) {
     return getDisplayUnit() === "USD"
-      ? formatUsdDisplay(totalUsd, state.hideBalances)
+      ? formatDisplayFiatValue(
+          getDisplayFiatValueFromBtc(totalBtc, {
+            fallbackUsd: totalUsd,
+          }),
+          state.hideBalances
+        )
       : formatWalletBtc(totalBtc, state.hideBalances);
   }
 
   function getWalletSummaryDisplay(totalBtc, totalUsd) {
     if (getDisplayUnit() === "USD") {
       return {
-        primary: formatUsdDisplay(totalUsd, state.hideBalances),
-        primaryHidden: "$ ••••••",
+        primary: formatDisplayFiatValue(
+          getDisplayFiatValueFromBtc(totalBtc, {
+            fallbackUsd: totalUsd,
+          }),
+          state.hideBalances
+        ),
+        primaryHidden: formatDisplayFiatValue(null, true),
         secondary: formatWalletBtc(totalBtc, state.hideBalances),
         secondaryHidden: getHiddenBitcoinDisplay(),
       };
@@ -6429,8 +6894,13 @@
     return {
       primary: formatWalletBtc(totalBtc, state.hideBalances),
       primaryHidden: getHiddenBitcoinDisplay(),
-      secondary: formatUsdDisplay(totalUsd, state.hideBalances),
-      secondaryHidden: "$ ••••••",
+      secondary: formatDisplayFiatValue(
+        getDisplayFiatValueFromBtc(totalBtc, {
+          fallbackUsd: totalUsd,
+        }),
+        state.hideBalances
+      ),
+      secondaryHidden: formatDisplayFiatValue(null, true),
     };
   }
 
@@ -6439,7 +6909,7 @@
       return escapeHtml(value);
     }
 
-    const prefix = ["₿", "BTC", "$"].find((candidate) => value.startsWith(candidate));
+    const prefix = getSupportedDisplayPrefixes().find((candidate) => value.startsWith(candidate));
     if (!prefix) {
       return escapeHtml(value);
     }
@@ -6452,18 +6922,16 @@
 
   function getTransactionAmountDisplay(item) {
     if (getDisplayUnit() === "USD") {
-      const signedUsdValue = Number.isFinite(item.usdValue)
-        ? Math.sign(item.netSats || 0) * item.usdValue
-        : null;
+      const signedFiatValue = getTransactionSignedDisplayFiatValue(item);
       return {
-        primary: buildSignedUsdMarkup(signedUsdValue, state.hideBalances),
+        primary: buildSignedDisplayFiatMarkup(signedFiatValue, Math.sign(item.netSats || 0), state.hideBalances),
         secondary: formatTransactionBitcoinAmount(item.netSats, state.hideBalances),
       };
     }
 
     return {
       primary: buildSignedBitcoinPrimaryMarkup(item.netSats / 1e8, state.hideBalances),
-      secondary: formatTransactionUsd(item.usdValue, state.hideBalances),
+      secondary: formatDisplayFiatTransactionValue(getTransactionThenDisplayFiatValue(item), state.hideBalances),
     };
   }
 
@@ -6472,9 +6940,8 @@
   }
 
   function getTransactionValueMetrics(item) {
-    const absoluteBtc = Math.abs(item.netSats || 0) / 1e8;
-    const valueThen = Number.isFinite(item.usdValue) ? item.usdValue : null;
-    const valueNow = Number.isFinite(runtime.currentPriceUsd) ? absoluteBtc * runtime.currentPriceUsd : null;
+    const valueThen = getTransactionThenDisplayFiatValue(item);
+    const valueNow = getTransactionCurrentDisplayFiatValue(item);
     const rawGrowthPercent =
       Number.isFinite(valueThen) && valueThen > 0 && Number.isFinite(valueNow)
         ? ((valueNow - valueThen) / valueThen) * 100
@@ -6482,8 +6949,8 @@
     const growthPercent = normalizeDisplayedGrowthPercent(rawGrowthPercent);
 
     return {
-      thenLabel: formatTransactionMetricUsd(valueThen),
-      nowLabel: formatTransactionMetricUsd(valueNow),
+      thenLabel: formatDisplayFiatMetricValue(valueThen, state.hideBalances),
+      nowLabel: formatDisplayFiatMetricValue(valueNow, state.hideBalances),
       growthLabel: formatTransactionGrowth(growthPercent),
       growthIcon:
         Number.isFinite(growthPercent) && growthPercent === 0
@@ -6519,9 +6986,12 @@
 
     const value =
       getDisplayUnit() === "USD"
-        ? Number.isFinite(entry.totalUsd)
-          ? formatUsdDisplay(entry.totalUsd, state.hideBalances)
-          : "$ --"
+        ? formatDisplayFiatValue(
+            getDisplayFiatValueFromBtc(entry.totalBtc, {
+              fallbackUsd: entry.totalUsd,
+            }),
+            state.hideBalances
+          )
         : Number.isFinite(entry.totalBtc)
           ? formatWalletBtc(entry.totalBtc, state.hideBalances)
           : `${getBitcoinDisplayPrefix()} --`;
@@ -6547,19 +7017,17 @@
     }
 
     return {
-      symbol: getDisplayUnit() === "USD" ? "$" : getBitcoinDisplayPrefix(),
+      symbol: getDisplayUnit() === "USD" ? getFiatDisplayPrefix() : getBitcoinDisplayPrefix(),
       range,
       timestamps: points.map((point) => point.timestamp),
       values: points.map((point) =>
         getDisplayUnit() === "USD"
-          ? Number.isFinite(point.usdValue)
-            ? point.usdValue
-            : Number.isFinite(runtime.currentPriceUsd)
-              ? point.btcHoldings * runtime.currentPriceUsd
-              : null
+          ? getPointDisplayFiatValue(point, {
+              preferIntraday: range === "1D",
+            })
           : point.btcHoldings
       ),
-      key: `${walletView.address?.id || walletView.wallet.id}-${range}-${getDisplayUnit().toLowerCase()}`,
+      key: `${walletView.address?.id || walletView.wallet.id}-${range}-${getDisplayChartUnitKey()}`,
     };
   }
 
@@ -6618,18 +7086,7 @@
   }
 
   function formatTransactionMetricUsd(value) {
-    if (state.hideBalances) {
-      return "$••••";
-    }
-
-    if (!Number.isFinite(value)) {
-      return "$--";
-    }
-
-    return `$${new Intl.NumberFormat("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(value)}`;
+    return formatDisplayFiatMetricValue(convertUsdValueToFiat(value), state.hideBalances);
   }
 
   function formatTransactionGrowth(value) {
@@ -6827,6 +7284,178 @@
 
   function hasRequiredDetailScope(snapshot, requiredScope) {
     return hasScopeCoverage(snapshot?.detailScope, requiredScope);
+  }
+
+  function normalizeFiatCurrency(value) {
+    return SUPPORTED_FIAT_CURRENCIES.includes(value) ? value : "USD";
+  }
+
+  function getFiatCurrency() {
+    return normalizeFiatCurrency(state.settings.fiatCurrency);
+  }
+
+  function getFiatDisplayPrefix(currency = getFiatCurrency()) {
+    return FIAT_DISPLAY_META[normalizeFiatCurrency(currency)]?.prefix || "$";
+  }
+
+  function getFiatIconGlyph(currency = getFiatCurrency()) {
+    return FIAT_DISPLAY_META[normalizeFiatCurrency(currency)]?.icon || "$";
+  }
+
+  function getDirectFiatProductId(currency = getFiatCurrency()) {
+    const normalizedCurrency = normalizeFiatCurrency(currency);
+    if (normalizedCurrency === "EUR") {
+      return "BTC-EUR";
+    }
+    if (normalizedCurrency === "GBP") {
+      return "BTC-GBP";
+    }
+    return null;
+  }
+
+  function getProductQuoteCurrency(productId) {
+    return String(productId || "BTC-USD").split("-")[1] || "USD";
+  }
+
+  function getFiatFractionDigits(currency = getFiatCurrency()) {
+    return FIAT_DISPLAY_META[normalizeFiatCurrency(currency)]?.fractionDigits ?? 2;
+  }
+
+  function getFiatExchangeRate(currency = getFiatCurrency()) {
+    const normalizedCurrency = normalizeFiatCurrency(currency);
+    if (normalizedCurrency === "USD") {
+      return 1;
+    }
+
+    const rate =
+      runtime.fiatExchangeRates instanceof Map ? runtime.fiatExchangeRates.get(normalizedCurrency) : null;
+    return Number.isFinite(rate) && rate > 0 ? rate : null;
+  }
+
+  function convertUsdValueToFiat(value, currency = getFiatCurrency()) {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+
+    const rate = getFiatExchangeRate(currency);
+    return Number.isFinite(rate) ? value * rate : null;
+  }
+
+  function hasDirectDisplayFiatMarket(currency = getFiatCurrency()) {
+    const normalizedCurrency = normalizeFiatCurrency(currency);
+    return (
+      Boolean(getDirectFiatProductId(normalizedCurrency)) &&
+      runtime.currentPriceFiatCurrency === normalizedCurrency &&
+      Number.isFinite(runtime.currentPriceFiat)
+    );
+  }
+
+  function getCurrentDisplayFiatUnitPrice() {
+    if (hasDirectDisplayFiatMarket()) {
+      return runtime.currentPriceFiat;
+    }
+
+    return convertUsdValueToFiat(runtime.currentPriceUsd);
+  }
+
+  function getHistoricalDisplayFiatUnitPrice(timestamp, { preferIntraday = false } = {}) {
+    if (!Number.isFinite(timestamp) || !hasDirectDisplayFiatMarket()) {
+      return null;
+    }
+
+    if (preferIntraday && runtime.fiatIntradayPriceHistory instanceof Map) {
+      const hourlyPrice = runtime.fiatIntradayPriceHistory.get(toHourKey(timestamp));
+      if (Number.isFinite(hourlyPrice)) {
+        return hourlyPrice;
+      }
+    }
+
+    if (runtime.fiatPriceHistory instanceof Map) {
+      const dailyPrice = runtime.fiatPriceHistory.get(toDateKey(timestamp));
+      if (Number.isFinite(dailyPrice)) {
+        return dailyPrice;
+      }
+    }
+
+    return null;
+  }
+
+  function getDisplayFiatValueFromBtc(
+    btcHoldings,
+    {
+      timestamp = null,
+      preferIntraday = false,
+      fallbackUsd = null,
+      preferCurrentPrice = !Number.isFinite(timestamp),
+    } = {}
+  ) {
+    if (!Number.isFinite(btcHoldings)) {
+      return Number.isFinite(fallbackUsd) ? convertUsdValueToFiat(fallbackUsd) : null;
+    }
+
+    const historicalPrice = Number.isFinite(timestamp)
+      ? getHistoricalDisplayFiatUnitPrice(timestamp, { preferIntraday })
+      : null;
+    if (Number.isFinite(historicalPrice)) {
+      return btcHoldings * historicalPrice;
+    }
+
+    const currentPrice = getCurrentDisplayFiatUnitPrice();
+    if (preferCurrentPrice && Number.isFinite(currentPrice)) {
+      return btcHoldings * currentPrice;
+    }
+
+    if (Number.isFinite(fallbackUsd)) {
+      return convertUsdValueToFiat(fallbackUsd);
+    }
+
+    return Number.isFinite(currentPrice) ? btcHoldings * currentPrice : null;
+  }
+
+  function getPointDisplayFiatValue(point, { preferIntraday = false } = {}) {
+    return getDisplayFiatValueFromBtc(point?.btcHoldings, {
+      timestamp: point?.timestamp,
+      preferIntraday,
+      fallbackUsd: point?.usdValue,
+    });
+  }
+
+  function getTransactionThenDisplayFiatValue(item) {
+    const absoluteBtc = Math.abs(item?.netSats || 0) / 1e8;
+    return getDisplayFiatValueFromBtc(absoluteBtc, {
+      timestamp: item?.timestamp,
+      fallbackUsd: item?.usdValue,
+    });
+  }
+
+  function getTransactionCurrentDisplayFiatValue(item) {
+    const absoluteBtc = Math.abs(item?.netSats || 0) / 1e8;
+    const fallbackUsd = Number.isFinite(runtime.currentPriceUsd) ? absoluteBtc * runtime.currentPriceUsd : null;
+    return getDisplayFiatValueFromBtc(absoluteBtc, {
+      fallbackUsd,
+    });
+  }
+
+  function getTransactionSignedDisplayFiatValue(item) {
+    const absoluteValue = getTransactionThenDisplayFiatValue(item);
+    if (!Number.isFinite(absoluteValue)) {
+      return null;
+    }
+
+    return Math.sign(item?.netSats || 0) * absoluteValue;
+  }
+
+  function getSupportedDisplayPrefixes() {
+    return uniqueStrings([
+      getFiatDisplayPrefix(),
+      getBitcoinDisplayPrefix(),
+      "BTC",
+      "₿",
+    ]).sort((left, right) => right.length - left.length);
+  }
+
+  function getDisplayChartUnitKey() {
+    return getDisplayUnit() === "USD" ? getFiatCurrency().toLowerCase() : getDisplayUnit().toLowerCase();
   }
 
   function getDisplayUnit() {

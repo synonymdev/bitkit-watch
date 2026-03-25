@@ -1854,6 +1854,14 @@ body.is-watch-view .watch-view-demo-wallet {
   min-width: 0;
 }
 
+.settings-preference-note {
+  margin: 0 0 0 24px;
+  max-width: 420px;
+  color: rgba(255, 191, 143, 0.72);
+  font-size: 12px;
+  line-height: 16px;
+}
+
 .settings-preference-icon {
   display: inline-flex;
   align-items: center;
@@ -1923,6 +1931,12 @@ body.is-watch-view .watch-view-demo-wallet {
   width: min(100%, 284px);
   flex: 0 0 284px;
   min-width: 0;
+}
+
+.settings-fiat-radios {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  width: min(100%, 420px);
+  flex: 0 1 420px;
 }
 
 .settings-notation-radio {
@@ -2446,6 +2460,15 @@ body.is-watch-view .watch-view-demo-wallet {
 
   .settings-switch {
     align-self: flex-end;
+  }
+
+  .settings-fiat-radios {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .settings-preference-note {
+    margin-left: 0;
+    max-width: none;
   }
 
   .chart-modal-toolbar {
