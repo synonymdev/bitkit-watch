@@ -4,9 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#070707" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Bitkit Watch" />
+    <link rel="icon" href="favicon.ico" type="image/x-icon" />
+    <link rel="icon" href="favicon-32x32.png" sizes="32x32" type="image/png" />
+    <link rel="icon" href="favicon-16x16.png" sizes="16x16" type="image/png" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" sizes="180x180" />
+    <link rel="manifest" href="site.webmanifest" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src https://mempool.space https://blockstream.info https://api.exchange.coinbase.com https://api.coinbase.com; base-uri 'none'; form-action 'none';"
+      content="default-src 'none'; script-src 'self' https://mcp.figma.com; script-src-elem 'self' https://mcp.figma.com; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'self' https://mempool.space https://blockstream.info https://api.exchange.coinbase.com https://api.coinbase.com https://mcp.figma.com; manifest-src 'self'; base-uri 'none'; form-action 'none';"
     />
     <title>Bitkit Watch</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -16,7 +24,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="styles.css?v=20260325-header-footer-progressive-1" />
-    <script src="assets/figma-capture-loader.js" defer></script>
+    <script src="assets/figma-capture-loader.js?v=20260326-csp-fix-1" defer></script>
     <script src="assets/satoshi-demo-snapshot.js" defer></script>
     <script src="assets/bitcoin-facts.js" defer></script>
     <script src="app.js?v=20260325-faq-5" defer></script>

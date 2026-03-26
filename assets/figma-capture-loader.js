@@ -12,8 +12,27 @@
     return;
   }
 
-  const script = document.createElement("script");
-  script.src = "https://mcp.figma.com/mcp/html-to-design/capture.js";
-  script.async = true;
-  document.head.appendChild(script);
+  function hasFigmaCapture(hash = window.location.hash) {
+    const params = new URLSearchParams(String(hash || "").replace(/^#/, ""));
+    return params.has("figmacapture");
+  }
+
+  function ensureFigmaCaptureScript() {
+    if (!hasFigmaCapture()) {
+      return;
+    }
+
+    if (document.querySelector('script[data-figma-capture-script="true"]')) {
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://mcp.figma.com/mcp/html-to-design/capture.js";
+    script.async = true;
+    script.dataset.figmaCaptureScript = "true";
+    document.head.appendChild(script);
+  }
+
+  ensureFigmaCaptureScript();
+  window.addEventListener("hashchange", ensureFigmaCaptureScript);
 })();
