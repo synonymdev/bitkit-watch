@@ -4562,6 +4562,14 @@
   // Validation
   // ---------------------------------------------------------------------------
 
+  function looksLikeBitcoinAddress(value) {
+    if (typeof value !== "string") return false;
+    const s = value.trim();
+    if (/^[13][1-9A-HJ-NP-Za-km-z]{25,34}$/.test(s)) return true;
+    if (/^bc1[a-z0-9]{11,71}$/i.test(s)) return true;
+    return false;
+  }
+
   const ValidationLayer = {
     async isValidMainnetBitcoinAddress(address) {
       const normalized = address.trim();
@@ -5001,6 +5009,9 @@
     },
   };
 
+  // Privacy note: market-data requests do not reveal watched addresses, but the
+  // timing pattern of price fetches alongside address fetches could fingerprint
+  // a Bitkit Watch session to the price-data provider.
   function fetchCurrentPriceQuote() {
     return fetchCurrentProductQuote("BTC-USD");
   }
@@ -5062,6 +5073,11 @@
     return nextRates;
   }
 
+  // Privacy note: sends a watched address to a third-party block explorer API.
+  // The provider can correlate the address with the requester's IP. Batch calls
+  // (via Promise.allSettled in refreshVault) expose multiple addresses in a short
+  // window, which strengthens the correlation. Users concerned about this should
+  // use Tor or a VPN (see FAQ).
   async function fetchAddressSummaryFromProvider(provider, address) {
     const encoded = encodeURIComponent(address);
     return fetchJson(`${provider.baseUrl}/address/${encoded}`, {
@@ -5069,6 +5085,8 @@
     });
   }
 
+  // Privacy: fetches full transaction history for an address. Same IP-correlation
+  // risk as fetchAddressSummaryFromProvider above.
   async function fetchAddressBundleFromProvider(provider, address, startTimestamp) {
     const encoded = encodeURIComponent(address);
     const summary = await fetchJson(`${provider.baseUrl}/address/${encoded}`, {
@@ -5735,13 +5753,13 @@
     const outputAddresses = [];
 
     (tx.vout || []).forEach((output) => {
-      if (output.scriptpubkey_address) {
+      if (looksLikeBitcoinAddress(output.scriptpubkey_address)) {
         outputAddresses.push(output.scriptpubkey_address);
       }
     });
 
     (tx.vin || []).forEach((input) => {
-      if (input.prevout?.scriptpubkey_address) {
+      if (looksLikeBitcoinAddress(input.prevout?.scriptpubkey_address)) {
         inputAddresses.push(input.prevout.scriptpubkey_address);
       }
     });
