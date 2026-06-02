@@ -3354,6 +3354,7 @@
     runtime.currentView = "watch";
     state.settings.activeWalletId = wallet.id;
     state.settings.activeAddressId = null;
+    state.selectedRange = "30D";
     resetViewTransientState();
     StorageLayer.saveState(state);
     clearAddressFeedback();
