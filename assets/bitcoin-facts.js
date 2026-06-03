@@ -35,7 +35,7 @@ globalThis.BITKIT_VAULT_BITCOIN_FACTS = Object.freeze({
     "Bitcoins don't grow on trees.",
     "There can only be 21 million bitcoins.",
     "Bitcoins are created when a block is mined.",
-    "One bitcoin is 100,000,000 satoshis.",
+    "One BTC is ₿100,000,000.",
     "The smallest unit of Bitcoin is a “satoshi.”",
     "Bitcoins live on the blockchain, not in wallets.",
     "You can hold keys, but you cannot hold bitcoin.",

@@ -1,3 +1,51 @@
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("assets/fonts/inter-tight-400.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("assets/fonts/inter-tight-500.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("assets/fonts/inter-tight-600.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("assets/fonts/inter-tight-700.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("assets/fonts/inter-tight-800.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: url("assets/fonts/inter-tight-900.ttf") format("truetype");
+}
+
 :root {
   /* Theme variables */
   --bg: #000000;
@@ -578,6 +626,8 @@ body.is-watch-view .watch-view-demo-wallet {
   gap: 16px;
   min-height: 32px;
   min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
 }
 
 .brand-home-button,
@@ -643,12 +693,16 @@ body.is-watch-view .watch-view-demo-wallet {
   align-items: center;
   gap: 10px;
   min-width: 0;
+  flex: 0 1 auto;
 }
 
 .address-crumb {
   display: inline-flex;
   align-items: center;
   min-width: 0;
+  max-width: 100%;
+  flex: 1 1 auto;
+  overflow: hidden;
   cursor: pointer;
 }
 
@@ -676,6 +730,8 @@ body.is-watch-view .watch-view-demo-wallet {
 
 .address-crumb-text--full {
   max-width: min(52vw, 640px);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .address-crumb-text--short {
@@ -688,6 +744,17 @@ body.is-watch-view .watch-view-demo-wallet {
 .wallet-title-button {
   cursor: pointer;
   gap: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+#walletTitleText {
+  display: block;
+  min-width: 0;
+  max-width: min(30vw, 320px);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .wallet-title-button.is-back {
@@ -827,7 +894,7 @@ body.is-watch-view .watch-view-demo-wallet {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-width: 0;
+  flex: 0 0 auto;
 }
 
 .topbar-status {
@@ -898,6 +965,9 @@ body.is-watch-view .watch-view-demo-wallet {
 }
 
 .app-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
   max-width: 100%;
   margin-bottom: 16px;
   margin-left: 32px;
@@ -905,17 +975,73 @@ body.is-watch-view .watch-view-demo-wallet {
   padding: 14px 16px;
   border: 0;
   border-radius: 16px;
-  background: rgba(125, 229, 147, 0.5);
-  color: var(--text-muted);
+  background: #ff4400;
+  color: #ffffff;
   font-size: 14px;
   line-height: 1.5;
+  opacity: 1;
+  overflow: hidden;
+  transition:
+    opacity 0.26s ease,
+    height 0.26s ease,
+    margin-bottom 0.26s ease,
+    padding-top 0.26s ease,
+    padding-bottom 0.26s ease;
+  will-change: opacity, height;
+}
+
+.app-banner.is-dismissing {
+  opacity: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  pointer-events: none;
+}
+
+.app-banner[hidden] {
+  display: none;
+}
+
+.app-banner__text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.app-banner__dismiss {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.app-banner__dismiss svg {
+  width: 16px;
+  height: 16px;
+}
+
+.app-banner__dismiss:hover {
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.app-banner__dismiss:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
 }
 
 .app-banner.is-warning {
   border: 0 !important;
   outline: 0;
   box-shadow: none;
-  background: rgba(255, 68, 0, 0.5);
+  background: #ff4400;
   color: #ffffff;
 }
 
@@ -923,7 +1049,12 @@ body.is-watch-view .watch-view-demo-wallet {
   border: 0 !important;
   outline: 0;
   box-shadow: none;
-  background: rgba(255, 68, 0, 0.5);
+  background: #ff4400;
+  color: #ffffff;
+}
+
+.app-banner.is-success {
+  background: rgba(125, 229, 147, 0.5);
   color: #ffffff;
 }
 
@@ -1312,9 +1443,26 @@ body.is-watch-view .watch-view-demo-wallet {
   gap: 8px;
 }
 
-.transaction-more-button {
+.transaction-more-controls {
+  display: flex;
+  align-items: center;
+  gap: 24px;
   margin-top: 16px;
+}
+
+.transaction-more-controls[hidden] {
+  display: none;
+}
+
+.transaction-more-button {
   align-self: flex-start;
+}
+
+.transaction-limit-note {
+  color: rgba(255, 255, 255, 0.32);
+  font-size: 11px;
+  line-height: 14.3px;
+  font-weight: 500;
 }
 
 .transaction-card {
@@ -1374,8 +1522,8 @@ body.is-watch-view .watch-view-demo-wallet {
 }
 
 .transaction-icon svg {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
 }
 
 .transaction-copy {
@@ -1878,7 +2026,7 @@ body.is-watch-view .watch-view-demo-wallet {
 }
 
 .form-feedback.is-error {
-  background: rgba(255, 68, 0, 0.5);
+  background: #ff4400;
   color: #ffffff;
   border: 0;
 }
@@ -1910,10 +2058,6 @@ body.is-watch-view .watch-view-demo-wallet {
   line-height: 1;
   font-weight: 600;
   letter-spacing: 0.1px;
-}
-
-.sparkline-axis-label--y {
-  text-anchor: start;
 }
 
 .sparkline-axis-label--x {
@@ -3052,6 +3196,14 @@ body.is-watch-view .watch-view-demo-wallet {
     padding: 16px 20px;
   }
 
+  .address-crumb-text--full {
+    display: none;
+  }
+
+  .address-crumb-text--short {
+    display: block;
+  }
+
   .wallets-overview,
   .wallet-detail,
   .faq-view {
@@ -3336,14 +3488,6 @@ body.is-watch-view .watch-view-demo-wallet {
   #walletTitleText {
     font-size: 11px;
     letter-spacing: 2.4px;
-  }
-
-  .address-crumb-text--full {
-    display: none;
-  }
-
-  .address-crumb-text--short {
-    display: block;
   }
 
   h2 {

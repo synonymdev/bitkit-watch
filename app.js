@@ -17,11 +17,32 @@
   const DAY_MS = 24 * 60 * 60 * 1000;
   const HOUR_MS = 60 * 60 * 1000;
   const CACHE_MAX_AGE_MS = HOUR_MS;
+  const SATOSHI_DEMO_AUTO_REFRESH_MAX_AGE_MS = HOUR_MS;
+  const TRANSIENT_MESSAGE_DURATION_MS = 6000;
+  const BANNER_DISMISS_ANIMATION_MS = 260;
   const ONE_YEAR_DAYS = 365;
   const HISTORY_DAYS = 120;
   const COLLAPSED_TRANSACTION_COUNT = 3;
   const TRANSACTION_PAGE_SIZE = 10;
   const MAX_PASTED_ADDRESSES = 10;
+  const MAX_WATCHED_ADDRESSES = 100;
+  const MAX_WALLETS = 50;
+  const MAX_TAGS_PER_ADDRESS = 20;
+  const MAX_ADDRESS_TAG_LENGTH = 48;
+  const MAX_ADDRESS_INPUT_LENGTH = 4096;
+  const MAX_TRANSACTIONS_PER_ADDRESS = 1000;
+  const MAX_TRANSACTION_PAGES = 18;
+  const MAX_EXPLORER_CONCURRENCY = 3;
+  const MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024;
+  const MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES = 8 * 1024 * 1024;
+  const MAX_STATE_STORAGE_BYTES = 2 * 1024 * 1024;
+  const MAX_RUNTIME_CACHE_STORAGE_BYTES = 10 * 1024 * 1024;
+  const HISTORY_AUTO_LOAD_FAILURE_WARNING = "History could not be loaded automatically. Click Refresh to retry.";
+  const TRUNCATED_ACTIVITY_LIMIT_NOTE = `(max ${MAX_TRANSACTIONS_PER_ADDRESS} newest transactions)`;
+  const LEGACY_TRUNCATED_ACTIVITY_WARNING_PREFIXES = Object.freeze([
+    "Address activity exceeds limit.",
+    "Some address activity exceeds",
+  ]);
   const DUST_ACTIVITY_THRESHOLD_SATS = 1000;
   const DETAIL_CHART_RANGES = {
     "1D": "1 day",
@@ -31,6 +52,7 @@
   };
   const STORAGE_KEYS = {
     state: "bitkit-vault-state-v1",
+    stateQuarantine: "bitkit-vault-state-quarantine-v1",
     runtimeCache: "bitkit-vault-runtime-cache-v1",
   };
   const FIGMA_CAPTURE_HASH_KEYS = Object.freeze([
@@ -51,10 +73,12 @@
     "1HLoD9E4SDFFPDiYfNYnkBLQ85Y51J3Zb1",
     "1FvzCLoTPGANNjWoUo6jUGuAG3wg1w4YjR",
   ];
+  const SATOSHI_DEMO_ADDRESS_KEYS = new Set(
+    SATOSHI_DEMO_ADDRESSES.map((address) => address.toLowerCase())
+  );
   const SATOSHI_DEMO_ADDRESS_TAGS = Object.freeze({
     "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa": ["genesis", "unspendable"],
   });
-  const SATOSHI_BAKED_SNAPSHOT = normalizeBakedDemoSnapshot(globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT);
   const BUNDLED_BITCOIN_FACTS = globalThis.BITKIT_VAULT_BITCOIN_FACTS;
   const PROBABLE_MNEMONIC_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
   const EXTENDED_PRIVATE_KEY_PREFIXES = Object.freeze([
@@ -81,6 +105,7 @@
     GBP: { prefix: "£", icon: "£", fractionDigits: 2 },
     CNY: { prefix: "CN¥", icon: "¥", fractionDigits: 2 },
   });
+  const SATOSHI_BAKED_SNAPSHOT = normalizeBakedDemoSnapshot(globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT);
   const FAQ_ITEMS = Object.freeze([
     {
       question: "Does Bitkit Watch hold my keys?",
@@ -157,7 +182,9 @@
       "walletSecondarySummary",
       "walletPrimarySummary",
       "walletTransactions",
+      "walletTransactionsControls",
       "walletTransactionsToggle",
+      "walletTransactionsLimitNote",
       "addressTagsSection",
       "addressTagList",
       "addressTagForm",
@@ -214,7 +241,7 @@
       "transactionModalKicker",
       "transactionModalBody",
     ],
-    shell: ["appBanner", "appFooterPrice", "appFooterPriceReference", "appFooterPriceValue"],
+    shell: ["appBanner", "appBannerText", "appBannerDismiss", "appFooterPrice", "appFooterPriceReference", "appFooterPriceValue"],
   };
 
   // ---------------------------------------------------------------------------
@@ -225,9 +252,16 @@
   let bitcoinFacts = [];
   let chartResizeFrame = 0;
   let headerStatusTimer = 0;
+  let bannerTimer = 0;
+  let bannerHideTimer = 0;
+  let bannerTimerTarget = null;
   let addressFeedbackFadeTimer = 0;
   let addressFeedbackHideTimer = 0;
   let overviewDetailPreloadPromise = null;
+  let activeDetailPreloadPromise = null;
+  let overviewCardRefreshInProgress = false;
+  let satoshiDemoIncrementalRefreshPromise = null;
+  let satoshiDemoIncrementalRefreshGroupId = null;
   const StorageLayer = {
     buildDefaultState,
     loadState,
@@ -258,7 +292,7 @@
     cacheDom();
     sanitizeState();
     hydrateRuntimeFromCache();
-    const bootstrappedDemoCache = hydrateBakedDemoRuntimeIfNeeded();
+    hydrateBakedDemoRuntimeIfNeeded();
     bitcoinFacts = normalizeBitcoinFactsPayload(BUNDLED_BITCOIN_FACTS);
     ensureCurrentBitcoinFactIndex();
     applyRouteFromHash({ replaceInvalid: true, renderAfter: false, preloadDetail: false });
@@ -266,9 +300,6 @@
     bindEvents();
     render();
     syncViewRoute("replace");
-    if (getFiatCurrency() !== "USD") {
-      refreshFiatExchangeRatesInBackground();
-    }
     if (state.addresses.length) {
       refreshCurrentPriceInBackground();
     }
@@ -280,19 +311,8 @@
       renderBanner();
     }
 
-    if (bootstrappedDemoCache) {
-      refreshVault({ reason: "demo-preload", allowSkeleton: false }).catch(() => {
-        render();
-      });
-      return;
-    }
-
-    if (shouldAutoRefreshVault()) {
-      refreshVault({ reason: "initial", allowSkeleton: !runtime.hasLoadedOnce }).catch((error) => {
-        setBanner("error", `Refresh failed. ${error.message || "Public APIs did not respond."}`);
-        render();
-      });
-    }
+    preloadActiveDetailDataIfNeeded();
+    refreshBundledSatoshiDemoInBackground(getBundledSatoshiDemoGroupId());
   }
 
   function createRuntimeState() {
@@ -332,7 +352,6 @@
       selectedTransactionTxid: null,
       expandedTechnicalTransactionTxid: null,
       transactionTechnicalAnimationTimer: null,
-      transactionDetailsLoadingTxids: [],
     };
   }
 
@@ -350,22 +369,77 @@
   }
 
   function hydrateBakedDemoRuntimeIfNeeded() {
-    if (!SATOSHI_BAKED_SNAPSHOT || runtime.hasLoadedOnce || runtime.addressSnapshots.length || !isFreshSatoshiDemoVault()) {
+    if (!SATOSHI_BAKED_SNAPSHOT || !isFreshSatoshiDemoVault()) {
       return false;
     }
 
+    const bakedRuntime = SATOSHI_BAKED_SNAPSHOT.runtimeCache;
+    const shouldUseBakedDetails =
+      bakedRuntime &&
+      (!hasCompleteCachedCoverage() || !hasCompleteDetailCoverage(bakedRuntime.historyScope));
+    if (runtime.addressSnapshots.length && !shouldUseBakedDetails) {
+      return false;
+    }
+
+    const currentPriceUsd = Number.isFinite(bakedRuntime?.currentPriceUsd)
+      ? bakedRuntime.currentPriceUsd
+      : SATOSHI_BAKED_SNAPSHOT.currentPriceUsd;
+    const timelineStart = Number.isFinite(bakedRuntime?.timelineStart)
+      ? bakedRuntime.timelineStart
+      : null;
+    const timelineEnd = Number.isFinite(bakedRuntime?.timelineEnd)
+      ? bakedRuntime.timelineEnd
+      : null;
+    const intradayStart = Number.isFinite(bakedRuntime?.intradayStart)
+      ? bakedRuntime.intradayStart
+      : null;
+    const intradayEnd = Number.isFinite(bakedRuntime?.intradayEnd)
+      ? bakedRuntime.intradayEnd
+      : null;
     const snapshots = state.addresses
       .filter((entry) =>
         Object.prototype.hasOwnProperty.call(SATOSHI_BAKED_SNAPSHOT.balancesByAddress, entry.address)
       )
-      .map((entry) =>
-        PortfolioLayer.buildSummarySnapshot({
+      .map((entry) => {
+        const bakedSnapshot = bakedRuntime?.snapshotsByAddress.get(entry.address);
+        if (!bakedSnapshot) {
+          return PortfolioLayer.buildSummarySnapshot({
+            entry,
+            provider: "Baked Demo Cache",
+            balanceSats: SATOSHI_BAKED_SNAPSHOT.balancesByAddress[entry.address],
+            currentPriceUsd,
+          });
+        }
+
+        const txEvents = bakedSnapshot.txEvents;
+        return {
           entry,
-          provider: "Baked Demo Cache",
-          balanceSats: SATOSHI_BAKED_SNAPSHOT.balancesByAddress[entry.address],
-          currentPriceUsd: SATOSHI_BAKED_SNAPSHOT.currentPriceUsd,
-        })
-      );
+          provider: bakedSnapshot.provider,
+          balanceSats: bakedSnapshot.balanceSats,
+          usdValue: (bakedSnapshot.balanceSats / 1e8) * currentPriceUsd,
+          txEvents,
+          balanceTimeline:
+            bakedSnapshot.balanceTimeline.length || !Number.isFinite(timelineStart) || !Number.isFinite(timelineEnd)
+              ? bakedSnapshot.balanceTimeline
+              : buildDailyBalanceTimeline(bakedSnapshot.balanceSats, txEvents, timelineStart, timelineEnd),
+          hourlyBalanceTimeline:
+            bakedSnapshot.hourlyBalanceTimeline.length ||
+            !Number.isFinite(intradayStart) ||
+            !Number.isFinite(intradayEnd)
+              ? bakedSnapshot.hourlyBalanceTimeline
+              : buildIntervalBalanceTimeline(
+                  bakedSnapshot.balanceSats,
+                  txEvents,
+                  intradayStart,
+                  intradayEnd,
+                  HOUR_MS,
+                  startOfUtcHour,
+                  toHourKey
+                ),
+          approximate: bakedSnapshot.approximate,
+          detailScope: bakedSnapshot.detailScope,
+        };
+      });
 
     if (!snapshots.length) {
       return false;
@@ -374,14 +448,22 @@
     runtime = {
       ...runtime,
       hasLoadedOnce: true,
-      currentPriceUsd: SATOSHI_BAKED_SNAPSHOT.currentPriceUsd,
+      historyScope: bakedRuntime?.historyScope || "SUMMARY",
+      currentPriceUsd,
+      fiatExchangeRates: bakedRuntime?.fiatExchangeRates || runtime.fiatExchangeRates,
+      priceHistory: bakedRuntime?.priceHistory || runtime.priceHistory,
+      intradayPriceHistory: bakedRuntime?.intradayPriceHistory || runtime.intradayPriceHistory,
+      historyAvailable: bakedRuntime?.historyAvailable ?? runtime.historyAvailable,
+      historyMissingDays: bakedRuntime?.historyMissingDays ?? runtime.historyMissingDays,
       addressSnapshots: snapshots,
       partialFailures: [],
-      approximationMode: false,
-      banner: {
-        tone: "default",
-        text: `Loaded Satoshi demo snapshot from ${formatBootstrapTimestamp(SATOSHI_BAKED_SNAPSHOT.asOf)}. Updating in background.`,
-      },
+      approximationMode:
+        Boolean(bakedRuntime?.approximationMode) || snapshots.some((snapshot) => snapshot.approximate),
+      timelineStart,
+      timelineEnd,
+      intradayStart,
+      intradayEnd,
+      banner: null,
     };
 
     StorageLayer.saveRuntimeCache(runtime);
@@ -471,6 +553,7 @@
 
     dom.brandHomeButton.addEventListener("click", openOverview);
     dom.vaultHomeButton.addEventListener("click", openOverview);
+    dom.appBannerDismiss.addEventListener("click", dismissBanner);
 
     dom.refreshButton.addEventListener("click", () => {
       refreshCurrentScope({ reason: "manual", allowSkeleton: !runtime.hasLoadedOnce }).catch((error) => {
@@ -671,6 +754,11 @@
         return;
       }
 
+      if (dom.walletAddressInput.value.length > MAX_ADDRESS_INPUT_LENGTH) {
+        showAddressFeedback(`Paste up to ${MAX_ADDRESS_INPUT_LENGTH} characters at once.`, "error");
+        return;
+      }
+
       const parsedAddresses = parseAddressInput(dom.walletAddressInput.value);
       if (!parsedAddresses.length) {
         showAddressFeedback("Enter a Bitcoin address.", "error");
@@ -715,6 +803,11 @@
       }
 
       const addressesToAdd = duplicateCheck.unique;
+      if (state.addresses.length + addressesToAdd.length > MAX_WATCHED_ADDRESSES) {
+        showAddressFeedback(`Bitkit Watch supports up to ${MAX_WATCHED_ADDRESSES} addresses.`, "error");
+        return;
+      }
+
       showAddressFeedback(
         addressesToAdd.length === 1
           ? "Validating address…"
@@ -811,13 +904,7 @@
       state.selectedRange = nextRange;
       StorageLayer.saveState(state);
       render();
-
-      if (state.addresses.length && !hasCompleteDetailCoverage(getRequiredDetailScopeForRange(nextRange))) {
-        refreshVault({ reason: "all-time", allowSkeleton: false }).catch((error) => {
-          setBanner("warning", `History failed to load. ${error.message || "Try again later."}`);
-          render();
-        });
-      }
+      preloadActiveDetailDataIfNeeded();
     };
 
     dom.walletChartTabs.addEventListener("click", onChartRangeClick);
@@ -882,10 +969,7 @@
         state.settings.fiatCurrency = nextFiat;
         StorageLayer.saveState(state);
         render();
-
-        if (nextFiat !== "USD" && !Number.isFinite(getFiatExchangeRate(nextFiat))) {
-          refreshFiatExchangeRatesInBackground();
-        }
+        refreshCurrentPriceInBackground();
       });
     });
 
@@ -944,6 +1028,7 @@
 
   async function refreshVault({ reason, allowSkeleton }) {
     if (!state.addresses.length) {
+      overviewCardRefreshInProgress = false;
       runtime = {
         ...createRuntimeState(),
         banner: null,
@@ -955,6 +1040,7 @@
 
     runtime.isLoading = allowSkeleton && !runtime.hasLoadedOnce;
     runtime.isRefreshing = runtime.hasLoadedOnce;
+    overviewCardRefreshInProgress = reason === "manual";
     runtime.partialFailures = [];
     setHeaderStatus("");
     if (reason !== "initial") {
@@ -975,8 +1061,10 @@
     const endTimestamp = Date.now();
 
     try {
-      const addressResults = await Promise.allSettled(
-        state.addresses.map((entry) => APILayer.fetchAddressBundle(entry.address, startTimestamp))
+      const addressResults = await allSettledWithConcurrency(
+        state.addresses,
+        MAX_EXPLORER_CONCURRENCY,
+        (entry) => APILayer.fetchAddressBundle(entry.address, startTimestamp)
       );
       const effectiveStartTimestamp =
         requestedHistoryScope === "ALL"
@@ -1090,8 +1178,15 @@
       setHeaderStatus(bannerParts.length || reason !== "manual" ? "" : "Watch refreshed");
 
       state.lastUpdated = new Date().toISOString();
+      markBundledSatoshiDemoRefreshedIfComplete(
+        state.addresses,
+        snapshots,
+        state.lastUpdated,
+        requestedHistoryScope
+      );
       StorageLayer.saveState(state);
       StorageLayer.saveRuntimeCache(runtime);
+      overviewCardRefreshInProgress = false;
       render();
       if (shouldPreloadOverviewDetail) {
         preloadOverviewDetailDataIfNeeded({ force: true });
@@ -1099,22 +1194,28 @@
     } catch (error) {
       runtime.isLoading = false;
       runtime.isRefreshing = false;
+      overviewCardRefreshInProgress = false;
       render();
       throw error;
     }
   }
 
   async function refreshCurrentScope({ reason, allowSkeleton }) {
+    const historyScopeOverride = reason === "manual" ? "ALL" : null;
     const activeAddress = getActiveAddress();
     if (activeAddress) {
-      return refreshScopedEntries([activeAddress], { reason, allowSkeleton });
+      return refreshScopedEntries([activeAddress], { reason, allowSkeleton, historyScopeOverride });
     }
 
     const activeWallet = getActiveWallet();
     if (activeWallet) {
+      if (reason === "manual" && isBundledSatoshiDemoGroup(activeWallet.id)) {
+        return refreshBundledSatoshiDemoManually(activeWallet.id);
+      }
+
       return refreshScopedEntries(
         state.addresses.filter((entry) => entry.groupId === activeWallet.id),
-        { reason, allowSkeleton }
+        { reason, allowSkeleton, historyScopeOverride }
       );
     }
 
@@ -1157,8 +1258,10 @@
     const endTimestamp = Date.now();
 
     try {
-      const addressResults = await Promise.allSettled(
-        scopedEntries.map((entry) => APILayer.fetchAddressBundle(entry.address, startTimestamp))
+      const addressResults = await allSettledWithConcurrency(
+        scopedEntries,
+        MAX_EXPLORER_CONCURRENCY,
+        (entry) => APILayer.fetchAddressBundle(entry.address, startTimestamp)
       );
       const effectiveStartTimestamp =
         requestedHistoryScope === "ALL"
@@ -1257,7 +1360,7 @@
           marketData.historyMissingDays > 0,
         historyScope: pickHigherHistoryScope(runtime.historyScope, requestedHistoryScope),
         banner: silent
-          ? runtime.banner
+          ? getBannerWithoutTruncatedActivityWarning(runtime.banner)
           : bannerParts.length
             ? {
                 tone: "warning",
@@ -1274,6 +1377,12 @@
       }
 
       state.lastUpdated = new Date().toISOString();
+      markBundledSatoshiDemoRefreshedIfComplete(
+        scopedEntries,
+        snapshots,
+        state.lastUpdated,
+        requestedHistoryScope
+      );
       StorageLayer.saveState(state);
       StorageLayer.saveRuntimeCache(runtime);
       render();
@@ -1312,17 +1421,82 @@
   function renderBanner() {
     const banner = runtime.banner;
     if (!banner?.text) {
-      dom.appBanner.hidden = true;
-      dom.appBanner.className = "app-banner";
-      dom.appBanner.textContent = "";
+      clearBannerTimer();
+      collapseBanner();
       return;
     }
 
+    clearBannerHideTimer();
+    resetBannerInlineStyles();
     dom.appBanner.hidden = false;
     dom.appBanner.className = `app-banner ${
-      banner.tone === "warning" ? "is-warning" : banner.tone === "error" ? "is-error" : ""
+      ["warning", "error", "success"].includes(banner.tone) ? `is-${banner.tone}` : ""
     }`.trim();
-    dom.appBanner.textContent = banner.text;
+    dom.appBannerText.textContent = banner.text;
+    ensureBannerAutoDismissTimer(banner);
+  }
+
+  function dismissBanner() {
+    clearBannerTimer();
+    runtime.banner = null;
+    renderBanner();
+  }
+
+  function ensureBannerAutoDismissTimer(banner) {
+    if (!banner?.text || (bannerTimer && bannerTimerTarget === banner)) {
+      return;
+    }
+
+    clearBannerTimer();
+    bannerTimerTarget = banner;
+    bannerTimer = window.setTimeout(() => {
+      if (runtime.banner === bannerTimerTarget) {
+        runtime.banner = null;
+        renderBanner();
+      }
+      bannerTimer = 0;
+      bannerTimerTarget = null;
+    }, TRANSIENT_MESSAGE_DURATION_MS);
+  }
+
+  function clearBannerTimer() {
+    if (bannerTimer) {
+      window.clearTimeout(bannerTimer);
+      bannerTimer = 0;
+    }
+    bannerTimerTarget = null;
+  }
+
+  function collapseBanner() {
+    if (dom.appBanner.hidden || dom.appBanner.classList.contains("is-dismissing")) {
+      return;
+    }
+
+    clearBannerHideTimer();
+    dom.appBanner.style.height = `${dom.appBanner.offsetHeight}px`;
+    dom.appBanner.style.overflow = "hidden";
+    dom.appBanner.offsetHeight;
+    dom.appBanner.classList.add("is-dismissing");
+    dom.appBanner.style.height = "0px";
+    bannerHideTimer = window.setTimeout(() => {
+      dom.appBanner.hidden = true;
+      dom.appBanner.className = "app-banner";
+      dom.appBannerText.textContent = "";
+      resetBannerInlineStyles();
+      bannerHideTimer = 0;
+    }, BANNER_DISMISS_ANIMATION_MS);
+  }
+
+  function clearBannerHideTimer() {
+    if (bannerHideTimer) {
+      window.clearTimeout(bannerHideTimer);
+      bannerHideTimer = 0;
+    }
+  }
+
+  function resetBannerInlineStyles() {
+    dom.appBanner.style.height = "";
+    dom.appBanner.style.overflow = "";
   }
 
   function renderFooter() {
@@ -1517,7 +1691,7 @@
       dom.walletSecondarySummary.textContent = secondaryHiddenLabel;
       dom.walletPrimarySummary.innerHTML = getWalletPrimaryMarkup(summaryDisplay.primaryHidden);
       dom.walletTransactions.innerHTML = buildTransactionSkeletons(COLLAPSED_TRANSACTION_COUNT);
-      dom.walletTransactionsToggle.hidden = true;
+      renderTransactionControls();
       if (activeAddress) {
         renderAddressTags(activeAddress.tags || []);
       }
@@ -1555,14 +1729,16 @@
     }
     if (loadingDetail) {
       dom.walletTransactions.innerHTML = buildTransactionSkeletons(COLLAPSED_TRANSACTION_COUNT);
-      dom.walletTransactionsToggle.hidden = true;
+      renderTransactionControls();
     } else {
       dom.walletTransactions.innerHTML = buildTransactionRows(detailView.activity, {
         visibleCount: visibleTransactionCount,
       });
       const remainingTransactions = Math.max(0, detailView.activity.length - visibleTransactionCount);
-      dom.walletTransactionsToggle.hidden = remainingTransactions <= 0;
-      dom.walletTransactionsToggle.textContent = `Show more`;
+      renderTransactionControls({
+        remainingTransactions,
+        hasTruncatedActivity: detailView.hasTruncatedActivity,
+      });
     }
     dom.walletChartKicker.textContent = chartKicker;
     dom.walletChartTitleSymbol.textContent = chartDisplay.symbol;
@@ -1591,6 +1767,18 @@
     });
     renderChartModal(activeWallet, detailView, chartDisplay);
     renderTransactionModal(activeWallet, activeAddress, detailView.activity);
+  }
+
+  function renderTransactionControls({ remainingTransactions = 0, hasTruncatedActivity = false } = {}) {
+    const showButton = remainingTransactions > 0;
+    const showLimitNote = Boolean(hasTruncatedActivity);
+    dom.walletTransactionsControls.hidden = !showButton && !showLimitNote;
+    dom.walletTransactionsToggle.hidden = !showButton;
+    dom.walletTransactionsLimitNote.hidden = !showLimitNote;
+    dom.walletTransactionsLimitNote.textContent = TRUNCATED_ACTIVITY_LIMIT_NOTE;
+    if (showButton) {
+      dom.walletTransactionsToggle.textContent = "Show more";
+    }
   }
 
   function renderChartModal(activeWallet, detailView, chartDisplay) {
@@ -2056,13 +2244,7 @@
 
     runtime.expandedTechnicalTransactionTxid = txid;
     syncTransactionTechnicalButton(toggleButton, true);
-    const hydrationStarted = startTransactionDetailsHydrationIfNeeded(txid, { renderOnStart: false });
     dom.transactionModalBody.classList.add("is-technical-expanded");
-
-    if (hydrationStarted) {
-      render();
-      return;
-    }
 
     window.requestAnimationFrame(() => {
       const technicalSection = dom.transactionModalBody.querySelector("[data-role='transaction-technical']");
@@ -2079,9 +2261,9 @@
     const valueMetrics = getTransactionValueMetrics(item);
     const technicalMetrics = getTransactionTechnicalMetrics(item);
     const isExpanded = runtime.expandedTechnicalTransactionTxid === item.txid;
-    const isTechnicalLoading = runtime.transactionDetailsLoadingTxids.includes(item.txid);
+    const isTechnicalLoading = false;
     const statusTone = item.confirmed ? "is-confirmed" : "is-pending";
-    const technicalButtonLabel = isExpanded ? "Hide Technical Details" : "Show Technical Details";
+    const technicalButtonLabel = isExpanded ? "Hide Technical Details" : "Technical Details";
     const technicalButtonIcon = isExpanded ? getEyeSlashIconMarkup() : getEyeIconMarkup();
     const inputAddresses = Array.isArray(item.inputAddresses) ? item.inputAddresses : [];
     const outputAddresses = Array.isArray(item.outputAddresses) ? item.outputAddresses : [];
@@ -2180,7 +2362,7 @@
               class="button button--pill button--outline button--fit"
               href="https://mempool.space/tx/${encodeURIComponent(item.txid)}"
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
             >
               <span class="button__icon" aria-hidden="true">${getGitBranchIconMarkup()}</span>
               <span>Block Explorer</span>
@@ -2268,7 +2450,7 @@
       <span class="button__icon" aria-hidden="true">${
         isExpanded ? getEyeSlashIconMarkup() : getEyeIconMarkup()
       }</span>
-      <span>${escapeHtml(isExpanded ? "Hide Technical Details" : "Show Technical Details")}</span>
+      <span>${escapeHtml(isExpanded ? "Hide Technical Details" : "Technical Details")}</span>
     `;
   }
 
@@ -2338,81 +2520,6 @@
     return state.addresses.find((entry) => entry.address.toLowerCase() === normalized)?.id || null;
   }
 
-  function transactionNeedsAddressHydration(item) {
-    if (!item) {
-      return false;
-    }
-
-    const inputAddresses = Array.isArray(item.inputAddresses) ? item.inputAddresses : [];
-    const outputAddresses = Array.isArray(item.outputAddresses) ? item.outputAddresses : [];
-    const isFeeMissing = !Number.isFinite(item.feeSats) || !Number.isFinite(item.feeRateSatVb);
-    return (inputAddresses.length === 0 && outputAddresses.length === 0) || isFeeMissing;
-  }
-
-  function startTransactionDetailsHydrationIfNeeded(txid, options = {}) {
-    const renderOnStart = options.renderOnStart !== false;
-    const transaction = getActiveWalletTransaction(txid);
-    if (!transactionNeedsAddressHydration(transaction) || runtime.transactionDetailsLoadingTxids.includes(txid)) {
-      return false;
-    }
-
-    runtime.transactionDetailsLoadingTxids = uniqueStrings([...runtime.transactionDetailsLoadingTxids, txid]);
-    if (renderOnStart) {
-      render();
-    }
-
-    hydrateTransactionDetails(txid);
-    return true;
-  }
-
-  async function hydrateTransactionDetails(txid) {
-    try {
-      const { transaction, warnings = [] } = await APILayer.fetchTransactionDetails(txid);
-      mergeTransactionDetailsIntoSnapshots(txid, transaction);
-      const rateLimitWarnings = dedupeRateLimitWarnings(warnings.filter((warning) => warning?.isRateLimit));
-      if (rateLimitWarnings.length) {
-        setBanner("warning", formatRateLimitWarning(rateLimitWarnings, "technical details lookup"));
-      }
-      StorageLayer.saveRuntimeCache(runtime);
-    } catch (error) {
-      setBanner(
-        "warning",
-        `Technical details are unavailable right now. ${error?.message || "Try a manual refresh."}`.trim()
-      );
-    } finally {
-      runtime.transactionDetailsLoadingTxids = runtime.transactionDetailsLoadingTxids.filter((entry) => entry !== txid);
-      render();
-    }
-  }
-
-  function mergeTransactionDetailsIntoSnapshots(txid, transaction) {
-    const { inputAddresses, outputAddresses } = extractTransactionAddresses(transaction);
-    const feeSats = Number.isFinite(transaction?.fee) ? Number(transaction.fee) : null;
-    const feeRateSatVb = extractTransactionFeeRate(transaction);
-
-    runtime.addressSnapshots = runtime.addressSnapshots.map((snapshot) => {
-      let snapshotChanged = false;
-      const nextEvents = snapshot.txEvents.map((event) => {
-        if (event.txid !== txid) {
-          return event;
-        }
-
-        snapshotChanged = true;
-        return {
-          ...event,
-          inputAddresses,
-          outputAddresses,
-          walletInputAddresses: uniqueStrings(inputAddresses.filter((address) => address === snapshot.entry.address)),
-          walletOutputAddresses: uniqueStrings(outputAddresses.filter((address) => address === snapshot.entry.address)),
-          feeSats,
-          feeRateSatVb,
-        };
-      });
-
-      return snapshotChanged ? { ...snapshot, txEvents: nextEvents } : snapshot;
-    });
-  }
-
   function buildTransactionSkeletons(count) {
     return Array.from({ length: count })
       .map(() => `<div class="skeleton-card skeleton-transaction"></div>`)
@@ -2451,6 +2558,10 @@
         .map((entry) => snapshotsById.get(entry.id))
         .filter(Boolean);
       const totals = PortfolioLayer.calculateTotals(snapshots);
+      const isSatoshiDemoIncrementalRefresh =
+        wallet.id === satoshiDemoIncrementalRefreshGroupId;
+      const showOverviewRefreshPlaceholder =
+        overviewCardRefreshInProgress && addresses.length > 0;
       const miniChartScene = getWalletCardMiniChartScene({
         walletId: wallet.id,
         addressCount: addresses.length,
@@ -2463,12 +2574,22 @@
         addressCount: addresses.length,
         totalBtc: totals.balanceSats / 1e8,
         totalUsd: totals.usdValue,
-        miniChartMarkup: miniChartScene ? miniChartScene.markup : "",
-        hasMiniChart: Boolean(miniChartScene),
+        miniChartMarkup:
+          !isSatoshiDemoIncrementalRefresh &&
+          !showOverviewRefreshPlaceholder &&
+          miniChartScene
+            ? miniChartScene.markup
+            : "",
+        hasMiniChart:
+          Boolean(miniChartScene) &&
+          !isSatoshiDemoIncrementalRefresh &&
+          !showOverviewRefreshPlaceholder,
         showMiniChartPlaceholder:
-          !miniChartScene &&
-          addresses.length > 0 &&
-          (runtime.isLoading || runtime.isRefreshing || !runtime.hasLoadedOnce),
+          isSatoshiDemoIncrementalRefresh ||
+          showOverviewRefreshPlaceholder ||
+          (!miniChartScene &&
+            addresses.length > 0 &&
+            (runtime.isLoading || runtime.isRefreshing || !runtime.hasLoadedOnce)),
         isBalanceLoading:
           addresses.length > 0 &&
           snapshots.length < addresses.length &&
@@ -2504,10 +2625,14 @@
 
     let dailyTimeline = [];
     if (hasDetailData && runtime.timelineStart && runtime.timelineEnd) {
+      const reliableTimelineStart = getReliableTimelineStartForSnapshots(
+        detailSnapshots,
+        runtime.timelineStart
+      );
       dailyTimeline = PortfolioLayer.combineTimelines(
         detailSnapshots,
         runtime.priceHistory,
-        runtime.timelineStart,
+        reliableTimelineStart,
         runtime.timelineEnd
       );
     }
@@ -2549,6 +2674,7 @@
       dailyTimeline,
       intradayTimeline,
       hasDetailData,
+      hasTruncatedActivity: hasUnsuppressedTruncatedSnapshots(detailSnapshots),
       activity: hasDetailData
         ? applyActivitySettings(
             ActivityLayer.buildCombinedActivity(detailSnapshots, runtime.priceHistory, runtime.currentPriceUsd)
@@ -2580,10 +2706,14 @@
 
     let dailyTimeline = [];
     if (hasDetailData && runtime.timelineStart && runtime.timelineEnd) {
+      const reliableTimelineStart = getReliableTimelineStartForSnapshots(
+        snapshots,
+        runtime.timelineStart
+      );
       dailyTimeline = PortfolioLayer.combineTimelines(
         snapshots,
         runtime.priceHistory,
-        runtime.timelineStart,
+        reliableTimelineStart,
         runtime.timelineEnd
       );
     }
@@ -2625,6 +2755,7 @@
       dailyTimeline,
       intradayTimeline,
       hasDetailData,
+      hasTruncatedActivity: hasUnsuppressedTruncatedSnapshots(snapshots),
       activity: hasDetailData
         ? applyActivitySettings(
             ActivityLayer.buildCombinedActivity(snapshots, runtime.priceHistory, runtime.currentPriceUsd)
@@ -2680,22 +2811,6 @@
 
   function getSnapshotsById() {
     return new Map(runtime.addressSnapshots.map((snapshot) => [snapshot.entry.id, snapshot]));
-  }
-
-  function shouldAutoRefreshVault() {
-    if (!state.addresses.length) {
-      return false;
-    }
-
-    if (!hasCompleteDetailCoverage(getRequiredDetailScopeForRange())) {
-      return true;
-    }
-
-    if (!hasCompleteCachedCoverage()) {
-      return true;
-    }
-
-    return isRuntimeCacheStale();
   }
 
   function isRuntimeCacheStale() {
@@ -2764,24 +2879,444 @@
   }
 
   function preloadActiveDetailDataIfNeeded() {
-    if (runtime.isLoading || runtime.isRefreshing || overviewDetailPreloadPromise) {
-      return;
+    if (activeDetailPreloadPromise || runtime.isLoading || runtime.isRefreshing) {
+      return activeDetailPreloadPromise;
     }
 
+    const request = getActiveDetailPreloadRequest();
+    if (!request) {
+      clearTruncatedActivityWarning();
+      clearHistoryAutoLoadFailureWarning();
+      return null;
+    }
+
+    clearTruncatedActivityWarning();
+    clearHistoryAutoLoadFailureWarning();
+    activeDetailPreloadPromise = refreshScopedEntries(request.entries, {
+      reason: "missing-history",
+      allowSkeleton: true,
+      historyScopeOverride: request.requiredScope,
+    })
+      .catch(() => {
+        if (getActiveDetailPreloadRequest()?.key === request.key) {
+          setBanner("warning", HISTORY_AUTO_LOAD_FAILURE_WARNING);
+          render();
+        }
+      })
+      .finally(() => {
+        activeDetailPreloadPromise = null;
+        const nextRequest = getActiveDetailPreloadRequest();
+        if (nextRequest && nextRequest.key !== request.key) {
+          preloadActiveDetailDataIfNeeded();
+        }
+      });
+
+    return activeDetailPreloadPromise;
+  }
+
+  function refreshBundledSatoshiDemoInBackground(groupId) {
+    if (
+      satoshiDemoIncrementalRefreshPromise ||
+      !shouldRefreshBundledSatoshiDemoInBackground(groupId)
+    ) {
+      return satoshiDemoIncrementalRefreshPromise;
+    }
+
+    return runBundledSatoshiDemoIncrementalRefresh(groupId, { silent: true });
+  }
+
+  function refreshBundledSatoshiDemoManually(groupId) {
+    if (
+      satoshiDemoIncrementalRefreshPromise ||
+      !isBundledSatoshiDemoGroup(groupId)
+    ) {
+      return satoshiDemoIncrementalRefreshPromise;
+    }
+
+    return runBundledSatoshiDemoIncrementalRefresh(groupId);
+  }
+
+  function runBundledSatoshiDemoIncrementalRefresh(groupId, { silent = false } = {}) {
+    satoshiDemoIncrementalRefreshGroupId = groupId;
+    runtime.isRefreshing = true;
+    if (!silent) {
+      setHeaderStatus("");
+      runtime.banner = null;
+    }
+    render();
+    const updatePromise = updateBundledSatoshiDemoCache(groupId);
+    satoshiDemoIncrementalRefreshPromise = (silent
+      ? updatePromise.catch(() => null)
+      : updatePromise
+    )
+      .then((result) => {
+        if (!silent && result) {
+          const failedCount = result.totalCount - result.successfulCount;
+          if (failedCount > 0) {
+            setBanner(
+              "warning",
+              `${failedCount} ${
+                failedCount === 1 ? "address" : "addresses"
+              } could not be refreshed. Showing partial data.`
+            );
+          } else {
+            setHeaderStatus("Watch refreshed");
+          }
+        }
+        return result;
+      })
+      .finally(() => {
+        runtime.isRefreshing = false;
+        satoshiDemoIncrementalRefreshPromise = null;
+        satoshiDemoIncrementalRefreshGroupId = null;
+        render();
+      });
+
+    return satoshiDemoIncrementalRefreshPromise;
+  }
+
+  function shouldRefreshBundledSatoshiDemoInBackground(groupId) {
+    if (
+      runtime.isLoading ||
+      runtime.isRefreshing ||
+      !SATOSHI_BAKED_SNAPSHOT?.asOf ||
+      !isBundledSatoshiDemoGroup(groupId)
+    ) {
+      return false;
+    }
+
+    const referenceTimestamp = getBundledSatoshiDemoLocalRefreshTimestamp();
+    return (
+      !Number.isFinite(referenceTimestamp) ||
+      Date.now() - referenceTimestamp > SATOSHI_DEMO_AUTO_REFRESH_MAX_AGE_MS
+    );
+  }
+
+  async function updateBundledSatoshiDemoCache(groupId) {
+    const entries = state.addresses.filter((entry) => entry.groupId === groupId);
+    const currentSnapshotsById = getSnapshotsById();
+    if (
+      !entries.length ||
+      entries.some((entry) => !currentSnapshotsById.get(entry.id))
+    ) {
+      throw new Error("Cached Satoshi demo history is incomplete. Reload the page to restore it.");
+    }
+
+    const referenceTimestamp = getBundledSatoshiDemoMarketReferenceTimestamp();
+    const endTimestamp = Date.now();
+    const marketStartTimestamp = startOfUtcDay(
+      Math.max(0, referenceTimestamp - DAY_MS)
+    );
+    const addressResults = await allSettledWithConcurrency(
+      entries,
+      MAX_EXPLORER_CONCURRENCY,
+      (entry) => {
+        const snapshot = currentSnapshotsById.get(entry.id);
+        return APILayer.fetchAddressDelta(
+          entry.address,
+          new Set(snapshot.txEvents.map((event) => event.txid))
+        );
+      }
+    );
+    const successfulResults = addressResults.filter((result) => result.status === "fulfilled");
+    if (!successfulResults.length) {
+      throw new Error("Incremental Satoshi demo refresh failed.");
+    }
+
+    const marketData = await APILayer.fetchMarketData(
+      marketStartTimestamp,
+      endTimestamp,
+      getFiatCurrency()
+    );
+    const mergedPriceHistory = mergeNumberMaps(runtime.priceHistory, marketData.priceHistory);
+    const timelineStart = Number.isFinite(runtime.timelineStart)
+      ? runtime.timelineStart
+      : marketStartTimestamp;
+    const nextSnapshots = [];
+
+    addressResults.forEach((result, index) => {
+      if (result.status !== "fulfilled") {
+        return;
+      }
+
+      const entry = entries[index];
+      const currentSnapshot = currentSnapshotsById.get(entry.id);
+      const bundle = result.value.bundle;
+      const balanceSats = getBalanceSatsFromSummary(bundle.summary);
+      const txEvents = mergeAddressTransactionEvents(
+        currentSnapshot.txEvents,
+        bundle.transactions,
+        entry.address
+      );
+      nextSnapshots.push({
+        ...currentSnapshot,
+        provider: result.value.provider,
+        balanceSats,
+        usdValue: (balanceSats / 1e8) * marketData.currentPriceUsd,
+        txEvents,
+        balanceTimeline: buildDailyBalanceTimeline(
+          balanceSats,
+          txEvents,
+          timelineStart,
+          endTimestamp
+        ),
+        hourlyBalanceTimeline: buildIntervalBalanceTimeline(
+          balanceSats,
+          txEvents,
+          marketData.intradayStart,
+          marketData.intradayEnd,
+          HOUR_MS,
+          startOfUtcHour,
+          toHourKey
+        ),
+        approximate:
+          currentSnapshot.approximate || bundle.truncated || !bundle.overlapFound,
+      });
+    });
+
+    replaceAddressSnapshots(nextSnapshots);
+    runtime = {
+      ...runtime,
+      hasLoadedOnce: true,
+      currentPriceUsd: marketData.currentPriceUsd,
+      fiatExchangeRates: mergeFiatExchangeRates(
+        marketData.fiatExchangeRates,
+        runtime.fiatExchangeRates
+      ),
+      currentPriceFiat: Number.isFinite(marketData.displayFiatMarket?.currentPrice)
+        ? marketData.displayFiatMarket.currentPrice
+        : null,
+      currentPriceFiatCurrency: marketData.displayFiatMarket?.currency || null,
+      fiatPriceHistory: mergeNumberMaps(
+        runtime.fiatPriceHistory,
+        marketData.displayFiatMarket?.priceHistory
+      ),
+      fiatIntradayPriceHistory:
+        marketData.displayFiatMarket?.intradayPriceHistory instanceof Map
+          ? marketData.displayFiatMarket.intradayPriceHistory
+          : runtime.fiatIntradayPriceHistory,
+      priceHistory: mergedPriceHistory,
+      intradayPriceHistory: marketData.intradayPriceHistory,
+      historyAvailable: runtime.historyAvailable && marketData.historyAvailable,
+      historyMissingDays: Math.max(runtime.historyMissingDays, marketData.historyMissingDays),
+      approximationMode:
+        runtime.addressSnapshots.some((snapshot) => snapshot.approximate) ||
+        runtime.partialFailures.length > 0 ||
+        !marketData.historyAvailable ||
+        marketData.historyMissingDays > 0,
+      timelineStart,
+      timelineEnd: endTimestamp,
+      intradayStart: marketData.intradayStart,
+      intradayEnd: marketData.intradayEnd,
+    };
+    if (successfulResults.length === entries.length) {
+      const refreshedAt = new Date(endTimestamp).toISOString();
+      state.lastUpdated = refreshedAt;
+      state.satoshiDemoLastRefreshedAt = refreshedAt;
+      StorageLayer.saveState(state);
+    }
+    StorageLayer.saveRuntimeCache(runtime);
+    render();
+    return {
+      successfulCount: successfulResults.length,
+      totalCount: entries.length,
+    };
+  }
+
+  function mergeAddressTransactionEvents(cachedEvents, transactions, watchedAddress) {
+    const eventsByTxid = new Map(
+      (Array.isArray(cachedEvents) ? cachedEvents : []).map((event) => [event.txid, event])
+    );
+    (Array.isArray(transactions) ? transactions : []).forEach((transaction) => {
+      const event = normalizeTransactionEvent(transaction, watchedAddress);
+      if (event) {
+        eventsByTxid.set(event.txid, event);
+      }
+    });
+    return [...eventsByTxid.values()]
+      .sort((left, right) => right.timestamp - left.timestamp)
+      .slice(0, MAX_TRANSACTIONS_PER_ADDRESS);
+  }
+
+  function getActiveDetailEntries() {
     const activeWallet = getActiveWallet();
     if (!activeWallet) {
-      return;
+      return [];
     }
 
     const activeAddress = getActiveAddress();
-    const detailView = activeAddress ? getAddressView(activeAddress.id) : getWalletView(activeWallet.id);
-    if (!detailView || detailView.hasDetailData || detailView.monitoredCount <= 0) {
+    return activeAddress
+      ? [activeAddress]
+      : state.addresses.filter((entry) => entry.groupId === activeWallet.id);
+  }
+
+  function getActiveDetailPreloadRequest() {
+    const activeWallet = getActiveWallet();
+    if (!activeWallet) {
+      return null;
+    }
+
+    const activeAddress = getActiveAddress();
+    const entries = getActiveDetailEntries();
+    if (!entries.length) {
+      return null;
+    }
+
+    const requiredScope = getRequiredDetailScopeForRange();
+    const snapshotsById = getSnapshotsById();
+    const hasRequiredCoverage = entries.every((entry) =>
+      hasRequiredDetailScope(snapshotsById.get(entry.id), requiredScope)
+    );
+    if (hasRequiredCoverage) {
+      return null;
+    }
+
+    return {
+      key: `${activeAddress?.id || activeWallet.id}:${requiredScope}`,
+      entries,
+      requiredScope,
+    };
+  }
+
+  function clearHistoryAutoLoadFailureWarning() {
+    if (runtime.banner?.text !== HISTORY_AUTO_LOAD_FAILURE_WARNING) {
       return;
     }
 
-    refreshVault({ reason: "detail-preload", allowSkeleton: false }).catch(() => {
-      render();
-    });
+    runtime.banner = null;
+    renderBanner();
+  }
+
+  function clearTruncatedActivityWarning() {
+    if (isTruncatedActivityWarning(runtime.banner?.text)) {
+      runtime.banner = null;
+      renderBanner();
+    }
+  }
+
+  function getBannerWithoutTruncatedActivityWarning(banner) {
+    return isTruncatedActivityWarning(banner?.text) ? null : banner;
+  }
+
+  function isTruncatedActivityWarning(text) {
+    return (
+      typeof text === "string" &&
+      LEGACY_TRUNCATED_ACTIVITY_WARNING_PREFIXES.some((prefix) => text.startsWith(prefix))
+    );
+  }
+
+  function hasUnsuppressedTruncatedSnapshots(snapshots) {
+    return snapshots.some(
+      (snapshot) => snapshot?.approximate && !isBundledSatoshiDemoEntry(snapshot.entry)
+    );
+  }
+
+  function getReliableTimelineStartForSnapshots(snapshots, fallbackStart) {
+    const fallback = Number.isFinite(fallbackStart) ? fallbackStart : null;
+    const approximateStarts = (Array.isArray(snapshots) ? snapshots : [])
+      .filter((snapshot) => snapshot?.approximate)
+      .map(getOldestKnownTransactionTimestamp)
+      .filter(Number.isFinite)
+      .map(startOfUtcDay);
+
+    if (!approximateStarts.length) {
+      return fallback;
+    }
+
+    return Math.max(fallback || 0, ...approximateStarts);
+  }
+
+  function getOldestKnownTransactionTimestamp(snapshot) {
+    const timestamps = Array.isArray(snapshot?.txEvents)
+      ? snapshot.txEvents
+          .map((event) => Number(event?.timestamp))
+          .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0)
+      : [];
+
+    return timestamps.length ? Math.min(...timestamps) : null;
+  }
+
+  function isBundledSatoshiDemoEntry(entry) {
+    return Boolean(entry?.groupId && isBundledSatoshiDemoGroup(entry.groupId));
+  }
+
+  function isBundledSatoshiDemoGroup(groupId) {
+    if (!groupId) {
+      return false;
+    }
+
+    const groupEntries = state.addresses.filter((candidate) => candidate.groupId === groupId);
+    return (
+      groupEntries.length === SATOSHI_DEMO_ADDRESSES.length &&
+      groupEntries.every((candidate) =>
+        SATOSHI_DEMO_ADDRESS_KEYS.has(candidate.address.toLowerCase())
+      )
+    );
+  }
+
+  function getBundledSatoshiDemoLocalRefreshTimestamp() {
+    const timestamp =
+      typeof state.satoshiDemoLastRefreshedAt === "string"
+        ? Date.parse(state.satoshiDemoLastRefreshedAt)
+        : NaN;
+    return Number.isFinite(timestamp) ? timestamp : null;
+  }
+
+  function getBundledSatoshiDemoMarketReferenceTimestamp() {
+    return [SATOSHI_BAKED_SNAPSHOT?.asOf, state.satoshiDemoLastRefreshedAt]
+      .map((value) => (typeof value === "string" ? Date.parse(value) : NaN))
+      .filter(Number.isFinite)
+      .reduce((latest, timestamp) => Math.max(latest, timestamp), 0);
+  }
+
+  function getBundledSatoshiDemoGroupId() {
+    return (
+      state.groups.find((group) => isBundledSatoshiDemoGroup(group.id))?.id ||
+      null
+    );
+  }
+
+  function markBundledSatoshiDemoRefreshedIfComplete(
+    refreshedEntries,
+    refreshedSnapshots,
+    refreshedAt,
+    detailScope
+  ) {
+    if (
+      normalizeHistoryScope(detailScope) !== "ALL" ||
+      typeof refreshedAt !== "string" ||
+      Number.isNaN(Date.parse(refreshedAt))
+    ) {
+      return;
+    }
+
+    const refreshedEntryIds = new Set(
+      (Array.isArray(refreshedEntries) ? refreshedEntries : []).map((entry) => entry?.id)
+    );
+    const refreshedSnapshotIds = new Set(
+      (Array.isArray(refreshedSnapshots) ? refreshedSnapshots : []).map(
+        (snapshot) => snapshot?.entry?.id
+      )
+    );
+    const groupIds = uniqueStrings(
+      (Array.isArray(refreshedEntries) ? refreshedEntries : [])
+        .map((entry) => entry?.groupId)
+        .filter(Boolean)
+    );
+    if (
+      groupIds.some((groupId) => {
+        if (!isBundledSatoshiDemoGroup(groupId)) {
+          return false;
+        }
+        return state.addresses
+          .filter((entry) => entry.groupId === groupId)
+          .every(
+            (entry) => refreshedEntryIds.has(entry.id) && refreshedSnapshotIds.has(entry.id)
+          );
+      })
+    ) {
+      state.satoshiDemoLastRefreshedAt = refreshedAt;
+    }
   }
 
   async function hydrateAddressAfterAdd(entry) {
@@ -2994,76 +3529,6 @@
     }
   }
 
-  async function refreshFiatExchangeRatesInBackground() {
-    const fiatCurrency = getFiatCurrency();
-    if (fiatCurrency === "USD") {
-      const hadDirectFiatState =
-        runtime.currentPriceFiatCurrency !== null ||
-        (runtime.fiatPriceHistory instanceof Map && runtime.fiatPriceHistory.size > 0) ||
-        (runtime.fiatIntradayPriceHistory instanceof Map && runtime.fiatIntradayPriceHistory.size > 0);
-      runtime.currentPriceFiat = null;
-      runtime.currentPriceFiatCurrency = null;
-      runtime.fiatPriceHistory = new Map();
-      runtime.fiatIntradayPriceHistory = new Map();
-      if (hadDirectFiatState) {
-        render();
-      }
-      return;
-    }
-
-    try {
-      const historyStart = Number.isFinite(runtime.timelineStart)
-        ? runtime.timelineStart
-        : startOfUtcDay(Date.now() - 29 * DAY_MS);
-      const historyEnd = Number.isFinite(runtime.timelineEnd) ? runtime.timelineEnd : Date.now();
-      const intradayStart = Number.isFinite(runtime.intradayStart)
-        ? runtime.intradayStart
-        : startOfUtcHour(Date.now() - 23 * HOUR_MS);
-      const intradayEnd = Number.isFinite(runtime.intradayEnd) ? runtime.intradayEnd : Date.now();
-      const [nextRatesRaw, displayFiatMarket] = await Promise.all([
-        APILayer.fetchFiatExchangeRates().catch(() => null),
-        fetchDirectFiatMarketData(fiatCurrency, historyStart, historyEnd, {
-          intradayStart,
-          intradayEnd,
-        }).catch(() => null),
-      ]);
-
-      const nextRates =
-        nextRatesRaw instanceof Map ? normalizeFiatExchangeRates(nextRatesRaw) : runtime.fiatExchangeRates;
-      const ratesUnchanged = areNumberMapsEqual(runtime.fiatExchangeRates, nextRates);
-      const directPrice = Number.isFinite(displayFiatMarket?.currentPrice)
-        ? displayFiatMarket.currentPrice
-        : null;
-      const nextFiatHistory =
-        displayFiatMarket?.priceHistory instanceof Map ? displayFiatMarket.priceHistory : new Map();
-      const nextFiatIntradayHistory =
-        displayFiatMarket?.intradayPriceHistory instanceof Map
-          ? displayFiatMarket.intradayPriceHistory
-          : new Map();
-      const directUnchanged =
-        runtime.currentPriceFiat === directPrice &&
-        runtime.currentPriceFiatCurrency === (displayFiatMarket?.currency || null) &&
-        areNumberMapsEqual(runtime.fiatPriceHistory, nextFiatHistory) &&
-        areNumberMapsEqual(runtime.fiatIntradayPriceHistory, nextFiatIntradayHistory);
-
-      if (ratesUnchanged && directUnchanged) {
-        return;
-      }
-
-      runtime.fiatExchangeRates = nextRates;
-      runtime.currentPriceFiat = directPrice;
-      runtime.currentPriceFiatCurrency = displayFiatMarket?.currency || null;
-      runtime.fiatPriceHistory = nextFiatHistory;
-      runtime.fiatIntradayPriceHistory = nextFiatIntradayHistory;
-      if (runtime.addressSnapshots.length) {
-        StorageLayer.saveRuntimeCache(runtime);
-      }
-      render();
-    } catch (error) {
-      // Keep existing FX rates if the background refresh fails.
-    }
-  }
-
   function upsertAddressSnapshot(nextSnapshot) {
     const nextId = nextSnapshot?.entry?.id;
     if (!nextId) {
@@ -3116,7 +3581,7 @@
   }
 
   function getFullHistoryScopeForBackground() {
-    return getRequiredDetailScopeForRange();
+    return "ALL";
   }
 
   function resetViewTransientState() {
@@ -3336,6 +3801,7 @@
     render();
     syncViewRoute("push");
     preloadActiveDetailDataIfNeeded();
+    refreshBundledSatoshiDemoInBackground(wallet.id);
 
     if (!state.addresses.some((entry) => entry.groupId === wallet.id)) {
       requestAnimationFrame(() => {
@@ -3345,6 +3811,12 @@
   }
 
   function createWallet() {
+    if (state.groups.length >= MAX_WALLETS) {
+      setBanner("warning", `Bitkit Watch supports up to ${MAX_WALLETS} wallets.`);
+      render();
+      return;
+    }
+
     const wallet = {
       id: createId("grp"),
       name: getNextWalletName(),
@@ -3385,6 +3857,7 @@
     render();
     syncViewRoute("push");
     preloadActiveDetailDataIfNeeded();
+    refreshBundledSatoshiDemoInBackground(address.groupId);
   }
 
   async function copyActiveAddressToClipboard() {
@@ -3395,7 +3868,7 @@
 
     try {
       await copyPlainTextToClipboard(activeAddress.address);
-      setHeaderStatus("Address copied", "success", { autoClearMs: 1800 });
+      setBanner("success", "Address copied.");
       render();
     } catch (error) {
       setBanner("warning", "Copy failed. Try selecting the address manually.");
@@ -3527,11 +4000,10 @@
     if (!state.addresses.length) {
       state.lastUpdated = null;
       StorageLayer.saveState(state);
-      StorageLayer.clearRuntimeCache();
       runtime = {
         ...createRuntimeState(),
         banner: {
-          tone: "default",
+          tone: "success",
           text: "Address removed.",
         },
       };
@@ -3541,14 +4013,9 @@
     }
 
     StorageLayer.saveRuntimeCache(runtime);
-    setBanner("default", "Address removed.");
+    setBanner("success", "Address removed.");
     render();
     syncViewRoute("replace");
-
-    refreshVault({ reason: "address-remove", allowSkeleton: false }).catch((error) => {
-      setBanner("warning", `Address removed, but refresh failed. ${error.message || ""}`.trim());
-      render();
-    });
   }
 
   function removeWallet(walletId) {
@@ -3599,9 +4066,8 @@
     if (!state.addresses.length) {
       state.lastUpdated = null;
       StorageLayer.saveState(state);
-      StorageLayer.clearRuntimeCache();
       runtime.banner = {
-        tone: "default",
+        tone: "success",
         text: "Wallet deleted.",
       };
       render();
@@ -3610,14 +4076,9 @@
     }
 
     StorageLayer.saveRuntimeCache(runtime);
-    setBanner("default", "Wallet deleted.");
+    setBanner("success", "Wallet deleted.");
     render();
     syncViewRoute("replace");
-
-    refreshVault({ reason: "wallet-remove", allowSkeleton: false }).catch((error) => {
-      setBanner("warning", `Wallet deleted, but refresh failed. ${error.message || ""}`.trim());
-      render();
-    });
   }
 
   function clearVault() {
@@ -3630,12 +4091,22 @@
     runtime = {
       ...createRuntimeState(),
       banner: {
-        tone: "default",
+        tone: "success",
         text: "Local Bitkit Watch data cleared.",
       },
     };
-    localStorage.removeItem(STORAGE_KEYS.state);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.state);
+    } catch (error) {
+      warnStorageFailure("Local wallet data could not be deleted from this browser.");
+    }
     StorageLayer.clearRuntimeCache();
+    StorageLayer.saveState(state);
+    hydrateBakedDemoRuntimeIfNeeded();
+    runtime.banner = {
+      tone: "success",
+      text: "Local Bitkit Watch data cleared.",
+    };
     clearAddressFeedback();
     clearAddressTagFeedback();
     resetAddressTagForm();
@@ -3707,6 +4178,11 @@
     }
 
     const currentTags = normalizeAddressTags(activeAddress.tags);
+    if (currentTags.length >= MAX_TAGS_PER_ADDRESS) {
+      showAddressTagFeedback(`Add up to ${MAX_TAGS_PER_ADDRESS} tags per address.`, "error");
+      return;
+    }
+
     const isDuplicate = currentTags.some((tag) => tag.toLowerCase() === nextTag.toLowerCase());
     if (isDuplicate) {
       showAddressTagFeedback("That tag already exists.", "error");
@@ -3839,7 +4315,11 @@
     runtime.banner = { tone, text };
   }
 
-  function setHeaderStatus(text, tone = "default", { autoClearMs = 0 } = {}) {
+  function setHeaderStatus(
+    text,
+    tone = "default",
+    { autoClearMs = TRANSIENT_MESSAGE_DURATION_MS } = {}
+  ) {
     if (headerStatusTimer) {
       window.clearTimeout(headerStatusTimer);
       headerStatusTimer = 0;
@@ -3883,6 +4363,7 @@
       selectedRange: "30D",
       settings: createDefaultSettings(),
       lastUpdated: null,
+      satoshiDemoLastRefreshedAt: null,
     };
     seedSatoshiDemoWallet(next, { force: true });
     return next;
@@ -3890,23 +4371,40 @@
 
   function loadState() {
     const fallback = buildDefaultState();
+    let raw = "";
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.state);
+      raw = localStorage.getItem(STORAGE_KEYS.state) || "";
       if (!raw) {
         return fallback;
       }
 
+      if (getUtf8ByteLength(raw) > MAX_STATE_STORAGE_BYTES) {
+        throw new Error("Stored state exceeds the supported size.");
+      }
+
       return normalizeImportedState(JSON.parse(raw));
     } catch (error) {
+      quarantineStoredState(raw);
       return {
         ...fallback,
-        _loadWarning: "Stored Bitkit Watch data was corrupted and has been reset.",
+        _loadWarning:
+          "Stored Bitkit Watch data could not be loaded. A recovery copy was preserved before defaults were restored.",
       };
     }
   }
 
   function saveState(nextState) {
-    localStorage.setItem(STORAGE_KEYS.state, JSON.stringify(serializeInternalState(nextState)));
+    try {
+      const serialized = JSON.stringify(serializeInternalState(nextState));
+      if (getUtf8ByteLength(serialized) > MAX_STATE_STORAGE_BYTES) {
+        throw new Error("Local watchlist data exceeds the supported size.");
+      }
+      localStorage.setItem(STORAGE_KEYS.state, serialized);
+      return true;
+    } catch (error) {
+      warnStorageFailure("Wallet changes could not be saved. This session will continue without persistence.");
+      return false;
+    }
   }
 
   function loadRuntimeCache(currentState) {
@@ -3916,9 +4414,14 @@
         return null;
       }
 
+      if (getUtf8ByteLength(raw) > MAX_RUNTIME_CACHE_STORAGE_BYTES) {
+        warnStorageFailure("Cached wallet history is too large to load. Click Refresh to rebuild it.");
+        return null;
+      }
+
       return normalizeRuntimeCache(JSON.parse(raw), currentState);
     } catch (error) {
-      localStorage.removeItem(STORAGE_KEYS.runtimeCache);
+      warnStorageFailure("Cached wallet history could not be loaded. Click Refresh to rebuild it.");
       return null;
     }
   }
@@ -3926,24 +4429,60 @@
   function saveRuntimeCache(currentRuntime) {
     const candidates = buildRuntimeCacheCandidates(currentRuntime);
     if (!candidates.length) {
-      clearRuntimeCache();
       return;
     }
 
     for (const serialized of candidates) {
       try {
-        localStorage.setItem(STORAGE_KEYS.runtimeCache, JSON.stringify(serialized));
+        const encoded = JSON.stringify(serialized);
+        if (getUtf8ByteLength(encoded) > MAX_RUNTIME_CACHE_STORAGE_BYTES) {
+          continue;
+        }
+        localStorage.setItem(STORAGE_KEYS.runtimeCache, encoded);
         return;
       } catch (error) {
         if (!isStorageQuotaError(error)) {
-          return;
+          break;
         }
       }
     }
+
+    warnStorageFailure("Wallet history could not be cached. This session will continue without persistence.");
   }
 
   function clearRuntimeCache() {
-    localStorage.removeItem(STORAGE_KEYS.runtimeCache);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.runtimeCache);
+    } catch (error) {
+      warnStorageFailure("Cached wallet history could not be deleted from this browser.");
+    }
+  }
+
+  function quarantineStoredState(raw) {
+    if (!raw) {
+      return;
+    }
+
+    try {
+      localStorage.setItem(STORAGE_KEYS.stateQuarantine, raw);
+    } catch (error) {
+      // Best effort only. The caller still restores a usable default state.
+    }
+  }
+
+  function warnStorageFailure(text) {
+    if (!runtime || runtime.banner?.tone === "error") {
+      return;
+    }
+
+    runtime.banner = {
+      tone: "warning",
+      text,
+    };
+  }
+
+  function getUtf8ByteLength(value) {
+    return new Blob([String(value || "")]).size;
   }
 
   function isStorageQuotaError(error) {
@@ -3987,6 +4526,7 @@
         showBackgroundGraphics: currentState.settings.showBackgroundGraphics !== false,
       },
       lastUpdated: currentState.lastUpdated,
+      satoshiDemoLastRefreshedAt: currentState.satoshiDemoLastRefreshedAt,
     };
   }
 
@@ -4032,6 +4572,11 @@
     next.lastUpdated =
       typeof candidate.lastUpdated === "string" && !Number.isNaN(Date.parse(candidate.lastUpdated))
         ? candidate.lastUpdated
+        : null;
+    next.satoshiDemoLastRefreshedAt =
+      typeof candidate.satoshiDemoLastRefreshedAt === "string" &&
+      !Number.isNaN(Date.parse(candidate.satoshiDemoLastRefreshedAt))
+        ? candidate.satoshiDemoLastRefreshedAt
         : null;
 
     seedSatoshiDemoWallet(next);
@@ -4221,6 +4766,18 @@
     return merged;
   }
 
+  function mergeNumberMaps(fallback, preferred) {
+    const merged = fallback instanceof Map ? new Map(fallback) : new Map();
+    if (preferred instanceof Map) {
+      preferred.forEach((value, key) => {
+        if (typeof key === "string" && Number.isFinite(value)) {
+          merged.set(key, value);
+        }
+      });
+    }
+    return merged;
+  }
+
   function areNumberMapsEqual(left, right) {
     const normalizedLeft = left instanceof Map ? left : new Map();
     const normalizedRight = right instanceof Map ? right : new Map();
@@ -4248,7 +4805,7 @@
       return [];
     }
 
-    const serialized = source.map((event) => ({
+    const serialized = source.slice(0, MAX_TRANSACTIONS_PER_ADDRESS).map((event) => ({
       txid: event.txid,
       timestamp: Number(event.timestamp || 0),
       confirmed: Boolean(event.confirmed),
@@ -4284,6 +4841,7 @@
     }
 
     return source
+      .slice(0, MAX_TRANSACTIONS_PER_ADDRESS)
       .map((event) => {
         if (!event || typeof event.txid !== "string") {
           return null;
@@ -4352,7 +4910,10 @@
   }
 
   function normalizeGroups(rawGroups) {
-    const source = Array.isArray(rawGroups) && rawGroups.length ? rawGroups : DEFAULT_WALLET_NAMES;
+    const source = (Array.isArray(rawGroups) && rawGroups.length ? rawGroups : DEFAULT_WALLET_NAMES).slice(
+      0,
+      MAX_WALLETS
+    );
     const normalized = [];
     const seen = new Set();
 
@@ -4379,7 +4940,7 @@
   }
 
   function normalizeAddresses(rawAddresses, groupNameToId, validGroupIds) {
-    const source = Array.isArray(rawAddresses) ? rawAddresses : [];
+    const source = Array.isArray(rawAddresses) ? rawAddresses.slice(0, MAX_WATCHED_ADDRESSES) : [];
     const seen = new Set();
     const normalized = [];
 
@@ -4418,11 +4979,13 @@
   }
 
   function normalizeAddressTag(value) {
-    return typeof value === "string" ? value.replace(/\s+/g, " ").trim().toLowerCase() : "";
+    return typeof value === "string"
+      ? value.replace(/\s+/g, " ").trim().toLowerCase().slice(0, MAX_ADDRESS_TAG_LENGTH)
+      : "";
   }
 
   function normalizeAddressTags(values) {
-    const source = Array.isArray(values) ? values : [];
+    const source = Array.isArray(values) ? values.slice(0, MAX_TAGS_PER_ADDRESS) : [];
     const seen = new Set();
     const normalized = [];
 
@@ -4719,14 +5282,14 @@
     }
 
     if (!crypto?.subtle?.digest) {
-      return true;
+      return false;
     }
 
     try {
       const hash = await doubleSha256(payload);
       return checksum.every((value, index) => value === hash[index]);
     } catch (error) {
-      return true;
+      return false;
     }
   }
 
@@ -4891,8 +5454,9 @@
 
   const APILayer = {
     async fetchAddressSummary(address) {
+      const normalizedAddress = await requireValidMainnetBitcoinAddress(address);
       const attempts = ADDRESS_API_PROVIDERS.map((provider) => async () => {
-        const summary = await fetchAddressSummaryFromProvider(provider, address);
+        const summary = await fetchAddressSummaryFromProvider(provider, normalizedAddress);
         return {
           provider: provider.name,
           summary,
@@ -4903,8 +5467,9 @@
     },
 
     async fetchAddressBundle(address, startTimestamp) {
+      const normalizedAddress = await requireValidMainnetBitcoinAddress(address);
       const attempts = ADDRESS_API_PROVIDERS.map((provider) => async () => {
-        const bundle = await fetchAddressBundleFromProvider(provider, address, startTimestamp);
+        const bundle = await fetchAddressBundleFromProvider(provider, normalizedAddress, startTimestamp);
         return {
           provider: provider.name,
           bundle,
@@ -4914,18 +5479,17 @@
       return withFallback(attempts, "Address lookup failed.");
     },
 
-    async fetchTransactionDetails(txid) {
+    async fetchAddressDelta(address, knownTxids) {
+      const normalizedAddress = await requireValidMainnetBitcoinAddress(address);
       const attempts = ADDRESS_API_PROVIDERS.map((provider) => async () => {
-        const transaction = await fetchJson(`${provider.baseUrl}/tx/${encodeURIComponent(txid)}`, {
-          providerName: provider.name,
-        });
+        const bundle = await fetchAddressDeltaFromProvider(provider, normalizedAddress, knownTxids);
         return {
           provider: provider.name,
-          transaction,
+          bundle,
         };
       });
 
-      return withFallback(attempts, "Transaction details unavailable.");
+      return withFallback(attempts, "Incremental address lookup failed.");
     },
 
     async fetchCurrentPriceUsd() {
@@ -5024,7 +5588,10 @@
         async () => {
           const response = await fetchJson(
             `https://api.exchange.coinbase.com/products/${encodeURIComponent(productId)}/ticker`,
-            { providerName: "Coinbase Exchange" }
+            {
+              providerName: "Coinbase Exchange",
+              validate: validateTickerPayload,
+            }
           );
           return { provider: "Coinbase Exchange", price: Number(response.price) };
         },
@@ -5033,6 +5600,7 @@
             `https://api.coinbase.com/v2/prices/${encodeURIComponent(productId)}/spot`,
             {
               providerName: "Coinbase Spot",
+              validate: validateSpotPayload,
             }
           );
           return { provider: "Coinbase Spot", price: Number(response.data.amount) };
@@ -5040,7 +5608,10 @@
         async () => {
           const response = await fetchJson(
             "https://api.coinbase.com/v2/exchange-rates?currency=BTC",
-            { providerName: "Coinbase Rates" }
+            {
+              providerName: "Coinbase Rates",
+              validate: validateRatesPayload,
+            }
           );
           return { provider: "Coinbase Rates", price: Number(response.data.rates[quoteCurrency]) };
         },
@@ -5052,6 +5623,7 @@
   async function fetchFiatExchangeRates() {
     const response = await fetchJson("https://api.coinbase.com/v2/exchange-rates?currency=BTC", {
       providerName: "Coinbase Rates",
+      validate: validateRatesPayload,
     });
     const btcRates = response?.data?.rates || {};
     const usdPerBtc = Number(btcRates.USD);
@@ -5076,13 +5648,14 @@
 
   // Privacy note: sends a watched address to a third-party block explorer API.
   // The provider can correlate the address with the requester's IP. Batch calls
-  // (via Promise.allSettled in refreshVault) expose multiple addresses in a short
+  // (with capped concurrency during refresh) expose multiple addresses in a short
   // window, which strengthens the correlation. Users concerned about this should
   // use Tor or a VPN (see FAQ).
   async function fetchAddressSummaryFromProvider(provider, address) {
     const encoded = encodeURIComponent(address);
     return fetchJson(`${provider.baseUrl}/address/${encoded}`, {
       providerName: provider.name,
+      validate: validateAddressSummaryPayload,
     });
   }
 
@@ -5092,6 +5665,7 @@
     const encoded = encodeURIComponent(address);
     const summary = await fetchJson(`${provider.baseUrl}/address/${encoded}`, {
       providerName: provider.name,
+      validate: validateAddressSummaryPayload,
     });
     const txResult = await fetchAddressTransactions(provider, address, startTimestamp);
 
@@ -5102,16 +5676,37 @@
     };
   }
 
+  async function fetchAddressDeltaFromProvider(provider, address, knownTxids) {
+    const encoded = encodeURIComponent(address);
+    const summary = await fetchJson(`${provider.baseUrl}/address/${encoded}`, {
+      providerName: provider.name,
+      validate: validateAddressSummaryPayload,
+    });
+    const txResult = await fetchAddressTransactionsUntilKnown(provider, address, knownTxids);
+
+    return {
+      summary,
+      transactions: txResult.transactions,
+      truncated: txResult.truncated,
+      overlapFound: txResult.overlapFound,
+    };
+  }
+
   async function fetchAddressTransactions(provider, address, startTimestamp) {
     const encoded = encodeURIComponent(address);
     const firstPage = await fetchJson(`${provider.baseUrl}/address/${encoded}/txs`, {
       providerName: provider.name,
+      validate: validateTransactionListPayload,
+      maxBytes: MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES,
     });
     const collected = [];
     const seen = new Set();
 
     const appendTransactions = (transactions) => {
       transactions.forEach((tx) => {
+        if (collected.length >= MAX_TRANSACTIONS_PER_ADDRESS) {
+          return;
+        }
         if (!seen.has(tx.txid)) {
           seen.add(tx.txid);
           collected.push(tx);
@@ -5125,11 +5720,16 @@
     let lastSeen = confirmedOnly.at(-1)?.txid || null;
     let oldestConfirmedTime = confirmedOnly.at(-1)?.status?.block_time || Number.MAX_SAFE_INTEGER;
     let pageCount = 0;
-    const maxPages = 18;
-
-    while (lastSeen && oldestConfirmedTime > startTimestamp / 1000 && pageCount < maxPages) {
+    while (
+      lastSeen &&
+      oldestConfirmedTime > startTimestamp / 1000 &&
+      pageCount < MAX_TRANSACTION_PAGES &&
+      collected.length < MAX_TRANSACTIONS_PER_ADDRESS
+    ) {
       const nextPage = await fetchJson(`${provider.baseUrl}/address/${encoded}/txs/chain/${lastSeen}`, {
         providerName: provider.name,
+        validate: validateTransactionListPayload,
+        maxBytes: MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES,
       });
       if (!nextPage.length) {
         break;
@@ -5148,7 +5748,73 @@
         }
         return (tx.status.block_time || 0) * 1000 >= startTimestamp;
       }),
-      truncated: Boolean(lastSeen && oldestConfirmedTime > startTimestamp / 1000),
+      truncated: Boolean(
+        lastSeen &&
+          oldestConfirmedTime > startTimestamp / 1000 &&
+          (pageCount >= MAX_TRANSACTION_PAGES || collected.length >= MAX_TRANSACTIONS_PER_ADDRESS)
+      ),
+    };
+  }
+
+  async function fetchAddressTransactionsUntilKnown(provider, address, knownTxids) {
+    const encoded = encodeURIComponent(address);
+    const known = knownTxids instanceof Set ? knownTxids : new Set();
+    const collected = [];
+    const seen = new Set();
+    let overlapFound = false;
+    const appendTransactions = (transactions) => {
+      transactions.forEach((tx) => {
+        if (known.has(tx.txid)) {
+          overlapFound = true;
+          return;
+        }
+        if (collected.length >= MAX_TRANSACTIONS_PER_ADDRESS || seen.has(tx.txid)) {
+          return;
+        }
+        seen.add(tx.txid);
+        collected.push(tx);
+      });
+    };
+
+    const firstPage = await fetchJson(`${provider.baseUrl}/address/${encoded}/txs`, {
+      providerName: provider.name,
+      validate: validateTransactionListPayload,
+      maxBytes: MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES,
+    });
+    appendTransactions(firstPage);
+
+    const confirmedOnly = firstPage.filter((tx) => tx.status?.confirmed);
+    let lastSeen = confirmedOnly.at(-1)?.txid || null;
+    let pageCount = 0;
+    while (
+      lastSeen &&
+      !overlapFound &&
+      pageCount < MAX_TRANSACTION_PAGES &&
+      collected.length < MAX_TRANSACTIONS_PER_ADDRESS
+    ) {
+      const nextPage = await fetchJson(`${provider.baseUrl}/address/${encoded}/txs/chain/${lastSeen}`, {
+        providerName: provider.name,
+        validate: validateTransactionListPayload,
+        maxBytes: MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES,
+      });
+      if (!nextPage.length) {
+        lastSeen = null;
+        break;
+      }
+
+      appendTransactions(nextPage);
+      lastSeen = nextPage.at(-1)?.txid || null;
+      pageCount += 1;
+    }
+
+    return {
+      transactions: collected,
+      overlapFound,
+      truncated: Boolean(
+        !overlapFound &&
+          lastSeen &&
+          (pageCount >= MAX_TRANSACTION_PAGES || collected.length >= MAX_TRANSACTIONS_PER_ADDRESS)
+      ),
     };
   }
 
@@ -5163,7 +5829,11 @@
         fetchJson(
           `https://api.exchange.coinbase.com/products/${encodeURIComponent(productId)}/candles?granularity=86400&start=${encodeURIComponent(
             new Date(request.start).toISOString()
-          )}&end=${encodeURIComponent(new Date(request.end).toISOString())}`
+          )}&end=${encodeURIComponent(new Date(request.end).toISOString())}`,
+          {
+            providerName: "Coinbase Exchange",
+            validate: validateCandlesPayload,
+          }
         )
       )
     );
@@ -5205,7 +5875,11 @@
       for (const dateKey of pendingSpotDates) {
         try {
           const response = await fetchJson(
-            `https://api.coinbase.com/v2/prices/${encodeURIComponent(productId)}/spot?date=${encodeURIComponent(dateKey)}`
+            `https://api.coinbase.com/v2/prices/${encodeURIComponent(productId)}/spot?date=${encodeURIComponent(dateKey)}`,
+            {
+              providerName: "Coinbase Spot",
+              validate: validateSpotPayload,
+            }
           );
           closeByDay.set(dateKey, Number(response.data.amount));
         } catch (error) {
@@ -5240,7 +5914,11 @@
     const response = await fetchJson(
       `https://api.exchange.coinbase.com/products/${encodeURIComponent(productId)}/candles?granularity=3600&start=${encodeURIComponent(
         new Date(startTimestamp).toISOString()
-      )}&end=${encodeURIComponent(new Date(endTimestamp).toISOString())}`
+      )}&end=${encodeURIComponent(new Date(endTimestamp).toISOString())}`,
+      {
+        providerName: "Coinbase Exchange",
+        validate: validateCandlesPayload,
+      }
     );
 
     const closeByHour = new Map();
@@ -5358,7 +6036,154 @@
     return startOfUtcDay(Math.min(...timestamps));
   }
 
-  async function fetchJson(url, { providerName = "" } = {}) {
+  async function allSettledWithConcurrency(items, maxConcurrent, worker) {
+    const source = Array.isArray(items) ? items : [];
+    const results = new Array(source.length);
+    let nextIndex = 0;
+    const workerCount = Math.min(Math.max(1, maxConcurrent), source.length);
+
+    async function runWorker() {
+      while (nextIndex < source.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        try {
+          results[index] = {
+            status: "fulfilled",
+            value: await worker(source[index], index),
+          };
+        } catch (error) {
+          results[index] = {
+            status: "rejected",
+            reason: error,
+          };
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+    return results;
+  }
+
+  async function requireValidMainnetBitcoinAddress(address) {
+    const normalized = typeof address === "string" ? address.trim() : "";
+    if (!(await ValidationLayer.isValidMainnetBitcoinAddress(normalized))) {
+      throw createApiError("Skipped invalid stored Bitcoin address.");
+    }
+    return normalized;
+  }
+
+  function validateAddressSummaryPayload(payload) {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid address summary response.");
+    }
+
+    ["chain_stats", "mempool_stats"].forEach((statsKey) => {
+      const stats = payload[statsKey];
+      if (!stats || typeof stats !== "object") {
+        throw new Error("Invalid address summary response.");
+      }
+
+      ["funded_txo_sum", "spent_txo_sum"].forEach((valueKey) => {
+        if (!Number.isFinite(Number(stats[valueKey]))) {
+          throw new Error("Invalid address summary response.");
+        }
+      });
+    });
+  }
+
+  function validateTransactionListPayload(payload) {
+    if (!Array.isArray(payload)) {
+      throw new Error("Invalid transaction list response.");
+    }
+
+    payload.forEach(validateTransactionPayload);
+  }
+
+  function validateTransactionPayload(payload) {
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      typeof payload.txid !== "string" ||
+      !/^[0-9a-f]{64}$/i.test(payload.txid) ||
+      !Array.isArray(payload.vin) ||
+      !Array.isArray(payload.vout) ||
+      !payload.status ||
+      typeof payload.status !== "object"
+    ) {
+      throw new Error("Invalid transaction response.");
+    }
+  }
+
+  function validateTickerPayload(payload) {
+    if (!payload || !Number.isFinite(Number(payload.price)) || Number(payload.price) <= 0) {
+      throw new Error("Invalid price ticker response.");
+    }
+  }
+
+  function validateSpotPayload(payload) {
+    if (!payload?.data || !Number.isFinite(Number(payload.data.amount)) || Number(payload.data.amount) <= 0) {
+      throw new Error("Invalid spot price response.");
+    }
+  }
+
+  function validateRatesPayload(payload) {
+    if (!payload?.data?.rates || !Number.isFinite(Number(payload.data.rates.USD))) {
+      throw new Error("Invalid exchange-rate response.");
+    }
+  }
+
+  function validateCandlesPayload(payload) {
+    if (!Array.isArray(payload)) {
+      throw new Error("Invalid candle response.");
+    }
+
+    payload.forEach((candle) => {
+      if (!Array.isArray(candle) || !Number.isFinite(Number(candle[0])) || !Number.isFinite(Number(candle[4]))) {
+        throw new Error("Invalid candle response.");
+      }
+    });
+  }
+
+  async function readJsonResponse(response, maxBytes = MAX_API_RESPONSE_BYTES) {
+    const contentType = response.headers.get("content-type") || "";
+    if (!/^application\/(?:[^;]+\+)?json(?:;|$)/i.test(contentType)) {
+      throw new Error("API returned a non-JSON response.");
+    }
+
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      throw new Error("API response exceeded the supported size.");
+    }
+
+    if (!response.body?.getReader) {
+      const text = await response.text();
+      if (getUtf8ByteLength(text) > maxBytes) {
+        throw new Error("API response exceeded the supported size.");
+      }
+      return JSON.parse(text);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let receivedBytes = 0;
+    let text = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      receivedBytes += value.byteLength;
+      if (receivedBytes > maxBytes) {
+        await reader.cancel();
+        throw new Error("API response exceeded the supported size.");
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+    return JSON.parse(text);
+  }
+
+  async function fetchJson(url, { providerName = "", validate = null, maxBytes = MAX_API_RESPONSE_BYTES } = {}) {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 15000);
 
@@ -5368,6 +6193,8 @@
           Accept: "application/json",
         },
         mode: "cors",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
         signal: controller.signal,
       });
 
@@ -5378,7 +6205,11 @@
           url,
         });
       }
-      return await response.json();
+      const payload = await readJsonResponse(response, maxBytes);
+      if (typeof validate === "function") {
+        validate(payload);
+      }
+      return payload;
     } catch (error) {
       throw annotateApiError(error, { providerName, url });
     } finally {
@@ -5651,31 +6482,13 @@
     },
 
     combineTimelines(snapshots, priceHistory, startTimestamp, endTimestamp) {
-      const totalsByDay = new Map();
-
-      snapshots.forEach((snapshot) => {
-        snapshot.balanceTimeline.forEach((point) => {
-          totalsByDay.set(point.dateKey, (totalsByDay.get(point.dateKey) || 0) + point.balanceSats);
-        });
-      });
-
-      const timeline = [];
-      for (let cursor = startOfUtcDay(startTimestamp); cursor <= endTimestamp; cursor += DAY_MS) {
-        const dateKey = toDateKey(cursor);
-        const balanceSats = totalsByDay.get(dateKey) || 0;
-        const btcHoldings = balanceSats / 1e8;
-        const usdPrice = priceHistory.get(dateKey);
-        timeline.push({
-          dateKey,
-          timestamp: cursor,
-          balanceSats,
-          btcHoldings,
-          usdPrice,
-          usdValue: Number.isFinite(usdPrice) ? btcHoldings * usdPrice : null,
-        });
-      }
-
-      return timeline;
+      return combineSnapshotTimelines(
+        snapshots,
+        "balanceTimeline",
+        priceHistory,
+        startTimestamp,
+        endTimestamp
+      );
     },
 
     calculateTotals(snapshots) {
@@ -5883,21 +6696,47 @@
       keyForTimestamp = toDateKey,
     } = {}
   ) {
-    const totalsByKey = new Map();
+    const sources = (Array.isArray(snapshots) ? snapshots : [])
+      .map((snapshot) => {
+        const points = Array.isArray(snapshot?.[timelineKey])
+          ? snapshot[timelineKey]
+              .filter(
+                (point) =>
+                  Number.isFinite(point?.timestamp) &&
+                  Number.isFinite(point?.balanceSats)
+              )
+              .sort((left, right) => left.timestamp - right.timestamp)
+          : [];
+        return {
+          points,
+          index: 0,
+          balanceSats: 0,
+        };
+      })
+      .filter((source) => source.points.length);
+    if (!sources.length) {
+      return [];
+    }
 
-    snapshots.forEach((snapshot) => {
-      const timeline = snapshot[timelineKey] || [];
-      timeline.forEach((point) => {
-        totalsByKey.set(point.dateKey, (totalsByKey.get(point.dateKey) || 0) + point.balanceSats);
-      });
-    });
+    const timelineStart = alignTime(startTimestamp);
+    const safePriceHistory = priceHistory instanceof Map ? priceHistory : new Map();
 
     const timeline = [];
-    for (let cursor = alignTime(startTimestamp); cursor <= endTimestamp; cursor += stepMs) {
+    for (let cursor = timelineStart; cursor <= endTimestamp; cursor += stepMs) {
       const key = keyForTimestamp(cursor);
-      const balanceSats = totalsByKey.get(key) || 0;
+      let balanceSats = 0;
+      sources.forEach((source) => {
+        while (
+          source.index < source.points.length &&
+          source.points[source.index].timestamp <= cursor
+        ) {
+          source.balanceSats = source.points[source.index].balanceSats;
+          source.index += 1;
+        }
+        balanceSats += source.balanceSats;
+      });
       const btcHoldings = balanceSats / 1e8;
-      const usdPrice = priceHistory.get(key);
+      const usdPrice = safePriceHistory.get(key);
       timeline.push({
         dateKey: key,
         timestamp: cursor,
@@ -6121,9 +6960,6 @@
           .map(
             (label) => `
               <line class="sparkline-guide-line" x1="${leftInset}" y1="${label.y}" x2="${width - rightInset}" y2="${label.y}"></line>
-              <text class="sparkline-axis-label sparkline-axis-label--y" x="${leftInset}" y="${label.y}" dominant-baseline="middle">${escapeHtml(
-                label.text
-              )}</text>
             `
           )
           .join("")}
@@ -6278,7 +7114,6 @@
       return [
         {
           y: topY + (bottomY - topY) * 0.58,
-          text: formatChartAxisValue(max),
         },
       ];
     }
@@ -6286,7 +7121,6 @@
     const stops = [0.75, 0.5, 0.25];
     return stops.map((stop) => ({
       y: topY + (bottomY - topY) * (1 - stop),
-      text: formatChartAxisValue(min + range * stop),
     }));
   }
 
@@ -6309,81 +7143,6 @@
         text: formatChartXAxisLabel(timestamps[index], rangeLabel),
       };
     });
-  }
-
-  function formatChartAxisValue(value) {
-    if (state.hideBalances) {
-      return "•••";
-    }
-
-    if (!Number.isFinite(value)) {
-      return "--";
-    }
-
-    if (getDisplayUnit() === "USD") {
-      return `${getFiatDisplayPrefix()}${formatCompactAxisNumber(value)}`;
-    }
-
-    return `${getBitcoinDisplayPrefix()} ${
-      getBitcoinNotation() === "CLASSIC"
-        ? formatCompactClassicBitcoinAxisValue(value)
-        : formatCompactBitcoinAxisValue(value)
-    }`;
-  }
-
-  function formatCompactAxisNumber(value) {
-    const absolute = Math.abs(value);
-    const maximumFractionDigits = getFiatFractionDigits() === 0 ? 0 : 2;
-    if (absolute >= 1000) {
-      return new Intl.NumberFormat("en-US", {
-        notation: "compact",
-        maximumFractionDigits: maximumFractionDigits === 0 ? 0 : absolute >= 100000 ? 0 : 1,
-      }).format(value);
-    }
-
-    return new Intl.NumberFormat("en-US", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits:
-        maximumFractionDigits === 0 ? 0 : absolute < 10 ? Math.min(2, maximumFractionDigits) : 0,
-    }).format(value);
-  }
-
-  function formatCompactBitcoinAxisValue(value) {
-    const absolute = Math.abs(value);
-    if (absolute >= 1000) {
-      return new Intl.NumberFormat("en-US", {
-        notation: "compact",
-        maximumFractionDigits: absolute >= 100000 ? 0 : 1,
-      }).format(value);
-    }
-
-    if (absolute >= 1) {
-      return new Intl.NumberFormat("en-US", {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 2,
-      }).format(value);
-    }
-
-    return stripTrailingZeroes(Number(value).toFixed(4));
-  }
-
-  function formatCompactClassicBitcoinAxisValue(value) {
-    const absolute = Math.abs(value);
-    if (absolute >= 1000) {
-      return new Intl.NumberFormat("en-US", {
-        notation: "compact",
-        maximumFractionDigits: absolute >= 100000 ? 0 : 1,
-      }).format(value);
-    }
-
-    if (absolute >= 1) {
-      return new Intl.NumberFormat("en-US", {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 2,
-      }).format(value);
-    }
-
-    return stripTrailingZeroes(Number(value).toFixed(6));
   }
 
   function formatChartXAxisLabel(timestamp, rangeLabel) {
@@ -6543,8 +7302,8 @@
     if (direction === "Sent") {
       return `
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 19V5"></path>
-          <path d="m5 12 7-7 7 7"></path>
+          <path d="M7 17 17 7"></path>
+          <path d="M7 7h10v10"></path>
         </svg>
       `;
     }
@@ -6552,8 +7311,8 @@
     if (direction === "Received") {
       return `
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 5v14"></path>
-          <path d="m19 12-7 7-7-7"></path>
+          <path d="M17 7 7 17"></path>
+          <path d="M17 17H7V7"></path>
         </svg>
       `;
     }
@@ -7274,7 +8033,7 @@
       return "";
     }
 
-    return `${address.address.slice(0, 4)}...${address.address.slice(-4)}`;
+    return `${address.address.slice(0, 3)}...${address.address.slice(-3)}`;
   }
 
   function getAddressHeaderCrumbFullLabel(address) {
@@ -7379,6 +8138,57 @@
           : null,
       currentPriceUsd: candidate.currentPriceUsd,
       balancesByAddress,
+      runtimeCache: normalizeBakedDemoRuntimeCache(candidate.runtimeCache, candidate.currentPriceUsd),
+    };
+  }
+
+  function normalizeBakedDemoRuntimeCache(candidate, fallbackPriceUsd) {
+    if (!candidate || typeof candidate !== "object" || !Array.isArray(candidate.addressSnapshots)) {
+      return null;
+    }
+
+    const snapshotsByAddress = new Map();
+    candidate.addressSnapshots.forEach((snapshot) => {
+      if (!snapshot || typeof snapshot !== "object" || typeof snapshot.address !== "string") {
+        return;
+      }
+
+      const address = snapshot.address.trim();
+      if (!address || !Number.isFinite(snapshot.balanceSats)) {
+        return;
+      }
+
+      snapshotsByAddress.set(address, {
+        provider: typeof snapshot.provider === "string" ? snapshot.provider : "Baked Demo Cache",
+        balanceSats: Math.max(0, Math.round(snapshot.balanceSats)),
+        approximate: Boolean(snapshot.approximate),
+        detailScope: normalizeSnapshotDetailScope(snapshot.detailScope),
+        txEvents: normalizeCachedTxEvents(snapshot.txEvents),
+        balanceTimeline: normalizeCachedBalanceTimeline(snapshot.balanceTimeline),
+        hourlyBalanceTimeline: normalizeCachedBalanceTimeline(snapshot.hourlyBalanceTimeline),
+      });
+    });
+
+    if (!snapshotsByAddress.size) {
+      return null;
+    }
+
+    return {
+      historyScope: normalizeHistoryScope(candidate.historyScope),
+      currentPriceUsd: Number.isFinite(candidate.currentPriceUsd)
+        ? candidate.currentPriceUsd
+        : fallbackPriceUsd,
+      fiatExchangeRates: normalizeFiatExchangeRates(candidate.fiatExchangeRates),
+      priceHistory: deserializeNumberMap(candidate.priceHistory),
+      intradayPriceHistory: deserializeNumberMap(candidate.intradayPriceHistory),
+      historyAvailable: candidate.historyAvailable !== false,
+      historyMissingDays: Number.isFinite(candidate.historyMissingDays) ? candidate.historyMissingDays : 0,
+      approximationMode: Boolean(candidate.approximationMode),
+      timelineStart: Number.isFinite(candidate.timelineStart) ? candidate.timelineStart : null,
+      timelineEnd: Number.isFinite(candidate.timelineEnd) ? candidate.timelineEnd : null,
+      intradayStart: Number.isFinite(candidate.intradayStart) ? candidate.intradayStart : null,
+      intradayEnd: Number.isFinite(candidate.intradayEnd) ? candidate.intradayEnd : null,
+      snapshotsByAddress,
     };
   }
 
@@ -7630,8 +8440,9 @@
       return false;
     }
 
-    const demoSet = new Set(SATOSHI_DEMO_ADDRESSES.map((address) => address.toLowerCase()));
-    return state.addresses.every((entry) => demoSet.has(entry.address.toLowerCase()));
+    return state.addresses.every((entry) =>
+      SATOSHI_DEMO_ADDRESS_KEYS.has(entry.address.toLowerCase())
+    );
   }
 
   function formatBootstrapTimestamp(value) {
