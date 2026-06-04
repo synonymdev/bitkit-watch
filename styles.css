@@ -189,6 +189,7 @@ a {
   font: inherit;
   line-height: inherit;
   font-weight: 700;
+  text-decoration: none;
   cursor: pointer;
   transition: color var(--ease-base);
 }
@@ -310,9 +311,18 @@ p {
   height: 18px;
 }
 
-.button--icon:hover {
-  border-color: var(--accent);
-  background: rgba(38, 38, 38, 0.96);
+@media (hover: hover) and (pointer: fine) {
+  .button--icon:hover {
+    border-color: var(--accent);
+    background: rgba(38, 38, 38, 0.96);
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .button--icon:hover:not(.is-active) {
+    border-color: rgba(255, 255, 255, 0.02);
+    background: var(--surface);
+  }
 }
 
 .button--icon.is-active {
@@ -728,6 +738,12 @@ body.is-watch-view .watch-view-demo-wallet {
   color: var(--accent);
 }
 
+.address-crumb.is-copied .address-crumb-text,
+.address-crumb.is-copied:hover .address-crumb-text,
+.address-crumb.is-copied:focus-visible .address-crumb-text {
+  color: var(--success);
+}
+
 .address-crumb-text--full {
   max-width: min(52vw, 640px);
   overflow: hidden;
@@ -1104,6 +1120,8 @@ body.is-watch-view .watch-view-demo-wallet {
   position: relative;
   overflow: hidden;
   display: flex;
+  align-items: flex-start;
+  gap: 24px;
   min-height: 128px;
   padding: 24px;
   z-index: 0;
@@ -1148,12 +1166,29 @@ body.is-watch-view .watch-view-demo-wallet {
   transform: scale(1.08);
 }
 
+.faq-card-icon {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 64px;
+  width: 64px;
+  height: 64px;
+  color: var(--accent);
+  opacity: 0.96;
+}
+
+.faq-card-icon svg {
+  display: block;
+  width: 64px;
+  height: 64px;
+}
+
 .faq-card-copy {
   position: relative;
   z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
 }
 
 .faq-card-question {
@@ -1617,7 +1652,7 @@ body.is-watch-view .watch-view-demo-wallet {
 
 .wallet-chart-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -1630,24 +1665,21 @@ body.is-watch-view .watch-view-demo-wallet {
   justify-content: center;
   padding: 0 0 8px 0;
   border: 0;
-  border-bottom: 2px solid rgba(255, 255, 255, 0.4);
   background: transparent;
   color: rgba(255, 255, 255, 0.4);
   font-size: 13px;
   line-height: 18px;
   font-weight: 600;
-  transition: color var(--ease-base), border-color var(--ease-base);
+  transition: color var(--ease-base);
 }
 
 
 .wallet-chart-tab:hover:not(.is-active) {
   color: rgba(255, 255, 255, 0.72);
-  border-bottom-color: rgba(255, 255, 255, 0.72);
 }
 
 .wallet-chart-tab.is-active {
   color: var(--text);
-  border-bottom-color: var(--text);
 }
 
 .wallet-chart-stage {
@@ -2271,8 +2303,8 @@ body.is-watch-view .watch-view-demo-wallet {
 }
 
 .settings-preference-icon--bitcoin {
-  width: 18px;
-  font-size: 20px;
+  width: 16px;
+  font-size: 18px;
   line-height: 1;
   font-weight: 800;
 }
@@ -3295,7 +3327,8 @@ body.is-watch-view .watch-view-demo-wallet {
   }
 
   body::after {
-    background-size: 180%;
+    background-position: right -24px top -140px;
+    background-size: 230%;
   }
 
   .app-shell::after {
@@ -3326,12 +3359,21 @@ body.is-watch-view .watch-view-demo-wallet {
     padding: 24px 16px 0;
   }
 
+  .copy-highlight-button {
+    display: inline;
+  }
+
+  .overview-intro-lead {
+    white-space: nowrap;
+  }
+
   .modal--chart {
     padding: 16px;
   }
 
   .modal--settings {
-    padding: 16px;
+    align-items: flex-start;
+    padding: 12px;
   }
 
   .modal__card--wide {
@@ -3342,13 +3384,134 @@ body.is-watch-view .watch-view-demo-wallet {
     padding: 20px;
   }
 
+  .settings-modal-card {
+    width: 100%;
+    max-height: calc(100dvh - 24px);
+    overflow: hidden;
+    border-radius: 22px;
+  }
+
+  .settings-modal-toolbar {
+    margin-bottom: 14px;
+  }
+
+  .settings-modal-body {
+    max-height: calc(100dvh - 96px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-right: 2px;
+  }
+
+  .settings-modal-body .modal-title {
+    font-size: 26px;
+    line-height: 27px;
+    letter-spacing: -0.7px;
+  }
+
+  .settings-wrapper {
+    margin-top: 22px;
+    margin-bottom: 22px;
+  }
+
+  .settings-preference {
+    gap: 14px;
+    padding: 18px 0;
+  }
+
+  .settings-preference-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .settings-preference-copy {
+    gap: 10px;
+    flex: none;
+    min-width: 0;
+  }
+
+  .settings-preference-copy .text-value-sm {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .settings-preference--choice .settings-preference-row {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .settings-preference-icon {
+    width: 20px;
+    height: 20px;
+  }
+
+  .settings-preference-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .settings-preference-icon--bitcoin {
+    width: 20px;
+    font-size: 22px;
+  }
+
+  .settings-switch {
+    align-self: auto;
+    flex: 0 0 auto;
+  }
+
+  .settings-notation-radios,
+  .settings-fiat-radios {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+
+  .settings-notation-radios {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .settings-fiat-radios {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .settings-notation-radio {
+    min-height: 44px;
+    padding: 10px 0;
+  }
+
+  .settings-notation-radio-control {
+    width: 18px;
+    height: 18px;
+  }
+
+  .settings-notation-radio-control::after {
+    width: 8px;
+    height: 8px;
+  }
+
+  .settings-notation-radio-label {
+    font-size: 15px;
+    line-height: 18px;
+  }
+
+  .settings-modal-actions {
+    flex-direction: column-reverse;
+    gap: 10px;
+    padding-top: 0;
+  }
+
   .chart-modal-stage {
     min-height: min(56vh, 480px);
     height: min(56vh, 480px);
   }
 
   .layout {
-    padding-bottom: 24px;
+    padding-bottom: 132px;
   }
 
   .legal-layout {
@@ -3418,14 +3581,14 @@ body.is-watch-view .watch-view-demo-wallet {
   }
 
   .app-footer {
-    position: static;
-    left: auto;
-    bottom: auto;
-    width: auto;
+    position: fixed;
+    left: 50%;
+    bottom: 0;
+    width: 100vw;
     padding: 24px 16px 16px;
     margin-top: auto;
-    transform: none;
-    pointer-events: auto;
+    transform: translateX(-50%);
+    pointer-events: none;
   }
 
   .app-footer-content {
@@ -3434,13 +3597,26 @@ body.is-watch-view .watch-view-demo-wallet {
     gap: 12px;
   }
 
-  .progressive-blur-container--footer,
-  .app-footer::before {
-    display: none;
+  .progressive-blur-container--footer > .gradient {
+    background: linear-gradient(
+      180deg,
+      rgba(0, 0, 0, 0) 0%,
+      rgba(0, 0, 0, 0.78) 48%,
+      rgba(0, 0, 0, 1) 100%
+    );
+    box-shadow: 0 -22px 56px rgba(0, 0, 0, 0.42);
   }
 
   .app-footer-copy {
     max-width: none;
+  }
+
+  .app-footer-copy span {
+    display: inline;
+  }
+
+  .app-footer-copy span + span {
+    margin-top: 0;
   }
 
   .app-footer-price {
@@ -3464,8 +3640,8 @@ body.is-watch-view .watch-view-demo-wallet {
 
 @media (max-width: 560px) {
   body::after {
-    background-position: right 0 bottom 24px;
-    background-size: 210%;
+    background-position: right -32px top -180px;
+    background-size: 270%;
   }
 
   .topbar-actions {
@@ -3511,6 +3687,7 @@ body.is-watch-view .watch-view-demo-wallet {
   .faq-card {
     min-height: 0;
     padding: 20px;
+    gap: 18px;
   }
 
   .faq-card-question {
@@ -3521,6 +3698,11 @@ body.is-watch-view .watch-view-demo-wallet {
   .wallet-card {
     min-height: 96px;
     padding: 24px 20px;
+  }
+
+  .wallet-card.has-mini-chart,
+  .wallet-card.has-chart-placeholder {
+    min-height: 96px;
   }
 
   .address-row {

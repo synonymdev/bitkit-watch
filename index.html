@@ -17,10 +17,10 @@
       content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'self' https://mempool.space https://blockstream.info https://api.exchange.coinbase.com https://api.coinbase.com; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; upgrade-insecure-requests;"
     />
     <title>Bitkit Watch</title>
-    <link rel="stylesheet" href="styles.css?v=20260603-hardening-12" />
-    <script src="assets/satoshi-demo-snapshot.js?v=20260603-cap-1000-1" defer></script>
+    <link rel="stylesheet" href="styles.css?v=20260604-settings-bitcoin-icon-1" />
+    <script src="assets/satoshi-demo-snapshot.js?v=20260604-lean-technical-details-1" defer></script>
     <script src="assets/bitcoin-facts.js?v=20260602-copy-1" defer></script>
-    <script src="app.js?v=20260603-hardening-31" defer></script>
+    <script src="app.js?v=20260604-on-demand-tx-details-1" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -153,9 +153,10 @@
             <h2 id="overviewTitle">
               WATCH YOUR <span class="text-accent">BITCOIN</span>
             </h2>
-            <p class="copy-measure">
-              See your bitcoin grow over time.
-              <button class="copy-highlight copy-highlight-button" id="overviewFaqButton" type="button">Safely and privately.</button>
+            <p class="copy-measure overview-intro-copy">
+              <span class="overview-intro-lead">See your bitcoin grow over time.
+                <a class="copy-highlight copy-highlight-button" id="overviewFaqButton" href="#view=faq">Safely and privately.</a>
+              </span>
               Bitkit Watch lives only in your browser. No private keys. No account. No authentication. Just keep watch.
             </p>
           </header>
@@ -273,7 +274,7 @@
                     <button class="wallet-chart-tab" type="button" role="tab" data-range="1D">1 day</button>
                     <button class="wallet-chart-tab is-active" type="button" role="tab" data-range="30D">30 day</button>
                     <button class="wallet-chart-tab" type="button" role="tab" data-range="1Y">1 year</button>
-                    <button class="wallet-chart-tab" type="button" role="tab" data-range="ALL">All time</button>
+                    <button class="wallet-chart-tab" type="button" role="tab" data-range="ALL">All</button>
                   </div>
                   <div class="wallet-chart-stage" id="walletChartStage" role="button" tabindex="0" aria-label="Open expanded wallet chart"></div>
                 </article>
@@ -362,7 +363,7 @@
           </div>
           <div class="app-footer-content">
             <p class="app-footer-copy">
-              <span>Bitkit Watch was built by Synonym Software, S.A. DE C.V. ©2026. All rights reserved. v0.1.1.</span>
+              <span>Bitkit Watch was built by Synonym Software, S.A. DE C.V. ©2026. All rights reserved. v0.1.2</span>
               <span class="app-footer-legal">
                 By using Bitkit Watch you declare that you have read and accept the
                 <a href="terms-of-use.html">terms of use</a> and
@@ -419,7 +420,7 @@
               <button class="wallet-chart-tab" type="button" role="tab" data-range="1D">1 day</button>
               <button class="wallet-chart-tab is-active" type="button" role="tab" data-range="30D">30 day</button>
               <button class="wallet-chart-tab" type="button" role="tab" data-range="1Y">1 year</button>
-              <button class="wallet-chart-tab" type="button" role="tab" data-range="ALL">All time</button>
+              <button class="wallet-chart-tab" type="button" role="tab" data-range="ALL">All</button>
             </div>
             <div class="wallet-chart-stage chart-modal-stage" id="chartModalStage" aria-hidden="true"></div>
           </article>
@@ -442,7 +443,7 @@
           <div class="settings-modal-body">
             <h2 class="modal-title" id="settingsModalTitle">YOU ARE IN CONTROL</h2>
             <section class="settings-wrapper">
-              <section class="settings-preference" aria-labelledby="settingsDenominationLabel">
+              <section class="settings-preference settings-preference--choice" aria-labelledby="settingsDenominationLabel">
                 <div class="settings-preference-row">
                   <div class="settings-preference-copy">
                     <span class="settings-preference-icon settings-preference-icon--accent settings-preference-icon--bitcoin" aria-hidden="true">₿</span>
@@ -463,7 +464,7 @@
                 </div>
               </section>
 
-              <section class="settings-preference" aria-labelledby="settingsFiatLabel">
+              <section class="settings-preference settings-preference--choice" aria-labelledby="settingsFiatLabel">
                 <div class="settings-preference-row">
                   <div class="settings-preference-copy">
                     <span class="settings-preference-icon settings-preference-icon--accent" id="settingsFiatIcon" aria-hidden="true">$</span>

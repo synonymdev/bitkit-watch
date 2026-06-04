@@ -5,10 +5,10 @@
 */
 
 globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
-  "asOf": "2026-06-03T11:07:59.035Z",
-  "currentPriceUsd": 67121.63,
+  "asOf": "2026-06-04T17:47:07.976Z",
+  "currentPriceUsd": 63001.35,
   "balancesByAddress": {
-    "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa": 5720784789,
+    "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa": 5720785881,
     "12cbQLTFMXRnSzktFkuoG3eHoMeFtpTu3S": 44402676,
     "12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX": 135266916,
     "1HLoD9E4SDFFPDiYfNYnkBLQ85Y51J3Zb1": 7899714,
@@ -16,7 +16,7 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
   },
   "runtimeCache": {
     "historyScope": "ALL",
-    "currentPriceUsd": 67121.63,
+    "currentPriceUsd": 63001.35,
     "fiatExchangeRates": [
       [
         "USD",
@@ -24,19 +24,19 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
       ],
       [
         "EUR",
-        0.8613150018184411
+        0.8608590294583663
       ],
       [
         "JPY",
-        159.79600000000002
+        159.985
       ],
       [
         "GBP",
-        0.7438066102455783
+        0.7445502864374087
       ],
       [
         "CNY",
-        6.7661750000000005
+        6.767538688675532
       ]
     ],
     "priceHistory": [
@@ -15233,8 +15233,12 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
         98347.2
       ],
       [
+        "2026-06-04",
+        63006.22
+      ],
+      [
         "2026-06-03",
-        67124.79
+        64040
       ],
       [
         "2026-06-02",
@@ -21979,117 +21983,137 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
     ],
     "intradayPriceHistory": [
       [
-        "2026-06-03T11",
-        67128.25
+        "2026-06-04T17",
+        62971.34
       ],
       [
-        "2026-06-03T10",
-        67194.35
+        "2026-06-04T16",
+        63471.56
       ],
       [
-        "2026-06-03T09",
-        66971.83
+        "2026-06-04T15",
+        63813.58
       ],
       [
-        "2026-06-03T08",
-        66927.65
+        "2026-06-04T14",
+        63887.09
       ],
       [
-        "2026-06-03T07",
-        67128.75
+        "2026-06-04T13",
+        64176
       ],
       [
-        "2026-06-03T06",
-        66879.08
+        "2026-06-04T12",
+        63699.08
       ],
       [
-        "2026-06-03T05",
-        67223.73
+        "2026-06-04T11",
+        62478.12
       ],
       [
-        "2026-06-03T04",
-        66377.98
+        "2026-06-04T10",
+        62343.18
       ],
       [
-        "2026-06-03T03",
-        65754.13
+        "2026-06-04T09",
+        63177.89
       ],
       [
-        "2026-06-03T02",
-        66519.98
+        "2026-06-04T08",
+        63539.98
       ],
       [
-        "2026-06-03T01",
-        66817.99
+        "2026-06-04T07",
+        63531.01
       ],
       [
-        "2026-06-03T00",
-        66834
+        "2026-06-04T06",
+        63966.5
       ],
       [
-        "2026-06-02T23",
-        66658.35
+        "2026-06-04T05",
+        63893.55
       ],
       [
-        "2026-06-02T22",
-        66291.94
+        "2026-06-04T04",
+        64328.01
       ],
       [
-        "2026-06-02T21",
-        67460
+        "2026-06-04T03",
+        64283.38
       ],
       [
-        "2026-06-02T20",
-        67484.99
+        "2026-06-04T02",
+        63150
       ],
       [
-        "2026-06-02T19",
-        67213.59
+        "2026-06-04T01",
+        62099.03
       ],
       [
-        "2026-06-02T18",
-        67215.75
+        "2026-06-04T00",
+        63253.49
       ],
       [
-        "2026-06-02T17",
-        67356.4
+        "2026-06-03T23",
+        64040
       ],
       [
-        "2026-06-02T16",
-        67296.18
+        "2026-06-03T22",
+        64812.21
       ],
       [
-        "2026-06-02T15",
-        67158.38
+        "2026-06-03T21",
+        65672.75
       ],
       [
-        "2026-06-02T14",
-        67875.41
+        "2026-06-03T20",
+        64909.01
       ],
       [
-        "2026-06-02T13",
-        68678
+        "2026-06-03T19",
+        65356.01
       ],
       [
-        "2026-06-02T12",
-        68903.79
+        "2026-06-03T18",
+        65939.52
       ]
     ],
     "historyAvailable": true,
     "historyMissingDays": 0,
     "approximationMode": true,
     "timelineStart": 1306713600000,
-    "timelineEnd": 1780484879035,
-    "intradayStart": 1780401600000,
-    "intradayEnd": 1780484879035,
+    "timelineEnd": 1780595227976,
+    "intradayStart": 1780509600000,
+    "intradayEnd": 1780595227976,
     "addressSnapshots": [
       {
         "address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
         "provider": "Blockstream",
-        "balanceSats": 5720784789,
+        "balanceSats": 5720785881,
         "approximate": true,
         "detailScope": "ALL",
         "txEvents": [
+          {
+            "txid": "97bf58ee6af495b1648ab06aa2fb74344da178a97503ff9d66b4bcae3e99e1ff",
+            "timestamp": 1780576562000,
+            "confirmed": true,
+            "receivedSats": 546,
+            "sentSats": 0,
+            "netSats": 546,
+            "feeSats": 203,
+            "feeRateSatVb": 1.002469135802469
+          },
+          {
+            "txid": "f7cddd6cf457e1403d4ac27ef80328c5b61717ff4ff1ae1550bf97ce4be35a3e",
+            "timestamp": 1780574030000,
+            "confirmed": true,
+            "receivedSats": 546,
+            "sentSats": 0,
+            "netSats": 546,
+            "feeSats": 397,
+            "feeRateSatVb": 0.6102997694081476
+          },
           {
             "txid": "f29f566b69199049e7d5c0046d38e73d97893dd285b3d92111f9644d8adffa36",
             "timestamp": 1780471736000,
@@ -26819,32 +26843,12 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "netSats": 1092,
             "feeSats": 294,
             "feeRateSatVb": 1
-          },
-          {
-            "txid": "e014e639d55f644760be42cce2b341dea06cf2904904206978f6f728faf5e74d",
-            "timestamp": 1776362356000,
-            "confirmed": true,
-            "receivedSats": 546,
-            "sentSats": 0,
-            "netSats": 546,
-            "feeSats": 203,
-            "feeRateSatVb": 1.002469135802469
-          },
-          {
-            "txid": "dd6f32b1aaac506bdaba4a992da8e6b2c278e4c9d48b007b5718398b8da84c2c",
-            "timestamp": 1776362356000,
-            "confirmed": true,
-            "receivedSats": 546,
-            "sentSats": 0,
-            "netSats": 546,
-            "feeSats": 203,
-            "feeRateSatVb": 1.002469135802469
           }
         ]
       },
       {
         "address": "12cbQLTFMXRnSzktFkuoG3eHoMeFtpTu3S",
-        "provider": "Mempool",
+        "provider": "Blockstream",
         "balanceSats": 44402676,
         "approximate": false,
         "detailScope": "ALL",
@@ -26860,16 +26864,6 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "feeRateSatVb": 1.0070493454179255
           },
           {
-            "txid": "0120f1df1117007b68f753da2f4f0efe61ea35b3122e46203fd0b0f4df71fe69",
-            "timestamp": 1777594364000,
-            "confirmed": true,
-            "receivedSats": 1000,
-            "sentSats": 0,
-            "netSats": 1000,
-            "feeSats": 400,
-            "feeRateSatVb": 1.2012012012012012
-          },
-          {
             "txid": "ca04a98845bfa5c2b41ed2cb38d6f1c3bf40686c3631f7186f90fffd015ec799",
             "timestamp": 1777594364000,
             "confirmed": true,
@@ -26878,6 +26872,16 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "netSats": 1000,
             "feeSats": 16700,
             "feeRateSatVb": 50.150150150150154
+          },
+          {
+            "txid": "0120f1df1117007b68f753da2f4f0efe61ea35b3122e46203fd0b0f4df71fe69",
+            "timestamp": 1777594364000,
+            "confirmed": true,
+            "receivedSats": 1000,
+            "sentSats": 0,
+            "netSats": 1000,
+            "feeSats": 400,
+            "feeRateSatVb": 1.2012012012012012
           },
           {
             "txid": "c7363f4bfb5d209c0eddecc540851bf079d7cc679020c544c121a36f628aa5b9",
@@ -27200,16 +27204,6 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "feeRateSatVb": 20.037664783427495
           },
           {
-            "txid": "e1a94a21af0e242a70c7a85619c9f4077c22b9728d8808f335b2a07f40756c45",
-            "timestamp": 1728434097000,
-            "confirmed": true,
-            "receivedSats": 546,
-            "sentSats": 0,
-            "netSats": 546,
-            "feeSats": 792,
-            "feeRateSatVb": 6.034285714285715
-          },
-          {
             "txid": "7facd31487c3ec61cff138b6e4ee7b3128dd3be724f35d9711d03a78479582b7",
             "timestamp": 1728434097000,
             "confirmed": true,
@@ -27218,6 +27212,16 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "netSats": 546,
             "feeSats": 1170,
             "feeRateSatVb": 6.054333764553687
+          },
+          {
+            "txid": "e1a94a21af0e242a70c7a85619c9f4077c22b9728d8808f335b2a07f40756c45",
+            "timestamp": 1728434097000,
+            "confirmed": true,
+            "receivedSats": 546,
+            "sentSats": 0,
+            "netSats": 546,
+            "feeSats": 792,
+            "feeRateSatVb": 6.034285714285715
           },
           {
             "txid": "59c2ac1c0aade47f9ba6ab486e15519cd37a86209f63129661401d308c5c914e",
@@ -27400,16 +27404,6 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "feeRateSatVb": 43.7908787541713
           },
           {
-            "txid": "975cb247ef09ca523ddece60d4274f3f235bc0e5e9197439e61ad75e4b357d23",
-            "timestamp": 1707847751000,
-            "confirmed": true,
-            "receivedSats": 10000,
-            "sentSats": 0,
-            "netSats": 10000,
-            "feeSats": 4662,
-            "feeRateSatVb": 20.74304783092325
-          },
-          {
             "txid": "e90570d64d34d85052121b9f5a3b770d58d7423471c18264be61b85ae6e9ca4b",
             "timestamp": 1707847751000,
             "confirmed": true,
@@ -27418,6 +27412,16 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "netSats": 600,
             "feeSats": 5180,
             "feeRateSatVb": 23.022222222222222
+          },
+          {
+            "txid": "975cb247ef09ca523ddece60d4274f3f235bc0e5e9197439e61ad75e4b357d23",
+            "timestamp": 1707847751000,
+            "confirmed": true,
+            "receivedSats": 10000,
+            "sentSats": 0,
+            "netSats": 10000,
+            "feeSats": 4662,
+            "feeRateSatVb": 20.74304783092325
           },
           {
             "txid": "c80763842edc9a697a2114517cf0c138c5403a761ef63cfad1fa6993fa3475ed",
@@ -27510,14 +27514,14 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "feeRateSatVb": 15.11111111111111
           },
           {
-            "txid": "f919f541c07d0137dcf982f50b8c0f3cd406b36c92b3fe16730d3a98e45e0d08",
+            "txid": "bead0e3384c809caaf2cfee5956390922ae7f606973d30facfeadd4f28713bfb",
             "timestamp": 1687692619000,
             "confirmed": true,
             "receivedSats": 546,
             "sentSats": 0,
             "netSats": 546,
-            "feeSats": 3264,
-            "feeRateSatVb": 16.118518518518517
+            "feeSats": 2856,
+            "feeRateSatVb": 14.103703703703705
           },
           {
             "txid": "a731307198d3fbab365ed3a95174b926363c2f317cd5f326f57efc58b8477f45",
@@ -27530,14 +27534,14 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "feeRateSatVb": 15.11111111111111
           },
           {
-            "txid": "bead0e3384c809caaf2cfee5956390922ae7f606973d30facfeadd4f28713bfb",
+            "txid": "f919f541c07d0137dcf982f50b8c0f3cd406b36c92b3fe16730d3a98e45e0d08",
             "timestamp": 1687692619000,
             "confirmed": true,
             "receivedSats": 546,
             "sentSats": 0,
             "netSats": 546,
-            "feeSats": 2856,
-            "feeRateSatVb": 14.103703703703705
+            "feeSats": 3264,
+            "feeRateSatVb": 16.118518518518517
           },
           {
             "txid": "e48894aa1f9fb7c19d697929d99b625eced13f1e59e07593512d3722d6322552",
@@ -27850,37 +27854,17 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "feeRateSatVb": 37.878787878787875
           },
           {
-            "txid": "1d21fdbbddc8985ead4079261d9db4608f0b3cc946cb52081c5e347a9cddd63a",
+            "txid": "93a1c16f721c001190d8ee686efa80c534938d2ee8b49c98454365f56ecfa3fa",
             "timestamp": 1462481722000,
             "confirmed": true,
-            "receivedSats": 22272,
+            "receivedSats": 22302,
             "sentSats": 0,
-            "netSats": 22272,
-            "feeSats": 31080,
-            "feeRateSatVb": 137.52212389380531
-          },
-          {
-            "txid": "e82f85e879cba004ff6ed485a4c90b30350aa900d39327e2e37868504af74799",
-            "timestamp": 1462481722000,
-            "confirmed": true,
-            "receivedSats": 22272,
-            "sentSats": 0,
-            "netSats": 22272,
+            "netSats": 22302,
             "feeSats": 31080,
             "feeRateSatVb": 138.13333333333333
           },
           {
-            "txid": "fc0bffe90fa4bb922c77ce3a9fc86742cb6bd38f57a7bf28c900c0470de5137f",
-            "timestamp": 1462481722000,
-            "confirmed": true,
-            "receivedSats": 22272,
-            "sentSats": 0,
-            "netSats": 22272,
-            "feeSats": 31080,
-            "feeRateSatVb": 138.13333333333333
-          },
-          {
-            "txid": "eedbae6778bcf62f7ecd3eaa7bbabdcaf6992e9284ed2b3cc1c90f3a9fece711",
+            "txid": "43962be4fb4bcdd4a20417b9221383228baee5c3db95293cfcc47f3e5d7c00f7",
             "timestamp": 1462481722000,
             "confirmed": true,
             "receivedSats": 22272,
@@ -27900,27 +27884,7 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "feeRateSatVb": 138.13333333333333
           },
           {
-            "txid": "6f57d4621919f424a26b097d0f6ac17528c7d9c2519dad5df293af3ff94a6f6b",
-            "timestamp": 1462481722000,
-            "confirmed": true,
-            "receivedSats": 22272,
-            "sentSats": 0,
-            "netSats": 22272,
-            "feeSats": 31080,
-            "feeRateSatVb": 137.52212389380531
-          },
-          {
-            "txid": "91367b3361443bedc0b8f1dd45c6d9fb62ebc9c6b23858cffe155c14c080ea78",
-            "timestamp": 1462481722000,
-            "confirmed": true,
-            "receivedSats": 22302,
-            "sentSats": 0,
-            "netSats": 22302,
-            "feeSats": 31080,
-            "feeRateSatVb": 137.52212389380531
-          },
-          {
-            "txid": "41955ccca5522135e14821efeea6b3f4642ca1af24fac8fe59bd0c3cc098ec0b",
+            "txid": "e82f85e879cba004ff6ed485a4c90b30350aa900d39327e2e37868504af74799",
             "timestamp": 1462481722000,
             "confirmed": true,
             "receivedSats": 22272,
@@ -27940,7 +27904,27 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "feeRateSatVb": 137.52212389380531
           },
           {
-            "txid": "43962be4fb4bcdd4a20417b9221383228baee5c3db95293cfcc47f3e5d7c00f7",
+            "txid": "fc0bffe90fa4bb922c77ce3a9fc86742cb6bd38f57a7bf28c900c0470de5137f",
+            "timestamp": 1462481722000,
+            "confirmed": true,
+            "receivedSats": 22272,
+            "sentSats": 0,
+            "netSats": 22272,
+            "feeSats": 31080,
+            "feeRateSatVb": 138.13333333333333
+          },
+          {
+            "txid": "91367b3361443bedc0b8f1dd45c6d9fb62ebc9c6b23858cffe155c14c080ea78",
+            "timestamp": 1462481722000,
+            "confirmed": true,
+            "receivedSats": 22302,
+            "sentSats": 0,
+            "netSats": 22302,
+            "feeSats": 31080,
+            "feeRateSatVb": 137.52212389380531
+          },
+          {
+            "txid": "6f57d4621919f424a26b097d0f6ac17528c7d9c2519dad5df293af3ff94a6f6b",
             "timestamp": 1462481722000,
             "confirmed": true,
             "receivedSats": 22272,
@@ -27950,24 +27934,44 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "feeRateSatVb": 137.52212389380531
           },
           {
-            "txid": "93a1c16f721c001190d8ee686efa80c534938d2ee8b49c98454365f56ecfa3fa",
+            "txid": "1d21fdbbddc8985ead4079261d9db4608f0b3cc946cb52081c5e347a9cddd63a",
             "timestamp": 1462481722000,
             "confirmed": true,
-            "receivedSats": 22302,
+            "receivedSats": 22272,
             "sentSats": 0,
-            "netSats": 22302,
+            "netSats": 22272,
+            "feeSats": 31080,
+            "feeRateSatVb": 137.52212389380531
+          },
+          {
+            "txid": "eedbae6778bcf62f7ecd3eaa7bbabdcaf6992e9284ed2b3cc1c90f3a9fece711",
+            "timestamp": 1462481722000,
+            "confirmed": true,
+            "receivedSats": 22272,
+            "sentSats": 0,
+            "netSats": 22272,
+            "feeSats": 31080,
+            "feeRateSatVb": 137.52212389380531
+          },
+          {
+            "txid": "41955ccca5522135e14821efeea6b3f4642ca1af24fac8fe59bd0c3cc098ec0b",
+            "timestamp": 1462481722000,
+            "confirmed": true,
+            "receivedSats": 22272,
+            "sentSats": 0,
+            "netSats": 22272,
             "feeSats": 31080,
             "feeRateSatVb": 138.13333333333333
           },
           {
-            "txid": "c154aedf3df6f980def3aa25742ae4d176f32c74d43c297cd180e631a1a26f8d",
+            "txid": "63c9f255d218b88829582b08a32b84c41b2ba3eacdd38d7ecc883583685bdef9",
             "timestamp": 1462481421000,
             "confirmed": true,
-            "receivedSats": 22302,
+            "receivedSats": 22273,
             "sentSats": 0,
-            "netSats": 22302,
+            "netSats": 22273,
             "feeSats": 31080,
-            "feeRateSatVb": 138.13333333333333
+            "feeRateSatVb": 137.52212389380531
           },
           {
             "txid": "abb898accecb2d066ca772b9b79cdc2140cf2a6efe9e050b6e6eef277007f9f8",
@@ -27981,6 +27985,26 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
           },
           {
             "txid": "dfabb8ce324b16d78f8aa5d66adcfdf823e64c366eb96e7620ad4f02af25dab2",
+            "timestamp": 1462481421000,
+            "confirmed": true,
+            "receivedSats": 22273,
+            "sentSats": 0,
+            "netSats": 22273,
+            "feeSats": 31080,
+            "feeRateSatVb": 137.52212389380531
+          },
+          {
+            "txid": "c154aedf3df6f980def3aa25742ae4d176f32c74d43c297cd180e631a1a26f8d",
+            "timestamp": 1462481421000,
+            "confirmed": true,
+            "receivedSats": 22302,
+            "sentSats": 0,
+            "netSats": 22302,
+            "feeSats": 31080,
+            "feeRateSatVb": 138.13333333333333
+          },
+          {
+            "txid": "c4cbda5ea11c056dd08553c11be4c36b64bf458ad3cdad525d03ad9e0295ad50",
             "timestamp": 1462481421000,
             "confirmed": true,
             "receivedSats": 22273,
@@ -28008,26 +28032,6 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
             "netSats": 22302,
             "feeSats": 31080,
             "feeRateSatVb": 138.13333333333333
-          },
-          {
-            "txid": "63c9f255d218b88829582b08a32b84c41b2ba3eacdd38d7ecc883583685bdef9",
-            "timestamp": 1462481421000,
-            "confirmed": true,
-            "receivedSats": 22273,
-            "sentSats": 0,
-            "netSats": 22273,
-            "feeSats": 31080,
-            "feeRateSatVb": 137.52212389380531
-          },
-          {
-            "txid": "c4cbda5ea11c056dd08553c11be4c36b64bf458ad3cdad525d03ad9e0295ad50",
-            "timestamp": 1462481421000,
-            "confirmed": true,
-            "receivedSats": 22273,
-            "sentSats": 0,
-            "netSats": 22273,
-            "feeSats": 31080,
-            "feeRateSatVb": 137.52212389380531
           },
           {
             "txid": "e73a45c936d2ce195f13b5a715614f7d10f94ff7a6593dc24fcf98bf173941eb",
@@ -30392,7 +30396,7 @@ globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT = Object.freeze({
       },
       {
         "address": "1HLoD9E4SDFFPDiYfNYnkBLQ85Y51J3Zb1",
-        "provider": "Mempool",
+        "provider": "Blockstream",
         "balanceSats": 7899714,
         "approximate": false,
         "detailScope": "ALL",

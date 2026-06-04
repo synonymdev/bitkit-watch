@@ -41,10 +41,6 @@ Strict-Transport-Security: max-age=31536000
 
 Enable HSTS only after HTTPS deployment is confirmed. Do not add `includeSubDomains` until every subdomain is HTTPS-only.
 
-## Local Figma Capture
-
-Production HTML intentionally does not load `assets/figma-capture-loader.js` or allow `mcp.figma.com` in its CSP. Keep the helper local-only: use an explicit temporary localhost preview override when a Figma capture is needed, and do not deploy that override.
-
 ## Release Checks
 
 Run:

@@ -35,6 +35,7 @@
   const MAX_EXPLORER_CONCURRENCY = 3;
   const MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024;
   const MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES = 8 * 1024 * 1024;
+  const MAX_WALLET_CARD_CHART_POINTS = 365;
   const MAX_STATE_STORAGE_BYTES = 2 * 1024 * 1024;
   const MAX_RUNTIME_CACHE_STORAGE_BYTES = 10 * 1024 * 1024;
   const HISTORY_AUTO_LOAD_FAILURE_WARNING = "History could not be loaded automatically. Click Refresh to retry.";
@@ -48,7 +49,7 @@
     "1D": "1 day",
     "30D": "30 day",
     "1Y": "1 year",
-    ALL: "All time",
+    ALL: "All",
   };
   const STORAGE_KEYS = {
     state: "bitkit-vault-state-v1",
@@ -108,31 +109,37 @@
   const SATOSHI_BAKED_SNAPSHOT = normalizeBakedDemoSnapshot(globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT);
   const FAQ_ITEMS = Object.freeze([
     {
+      icon: "lock",
       question: "Does Bitkit Watch hold my keys?",
       answer:
         "No. Bitkit Watch is watch-only. It never asks for a seed, never imports a private key, and cannot sign on your behalf.",
     },
     {
+      icon: "database",
       question: "Where does my data live?",
       answer:
         "On this device, in this browser. Wallet names, watchlists, settings, and cached snapshots stay local until you wipe them.",
     },
     {
+      icon: "cloud-off",
       question: "Does Synonym get my watchlist?",
       answer:
         "There is no Bitkit Watch account and no cloud sync. Synonym does not get a hosted profile of your watch-only setup.",
     },
     {
+      icon: "plug",
       question: "What gets sent to APIs?",
       answer:
         "Only the public addresses you choose to watch, plus market-data requests needed to price them. Enough to price your stack, not enough to control it.",
     },
     {
+      icon: "fast-forward",
       question: "Can Bitkit Watch move my bitcoin?",
       answer:
         "Not a chance. No signing. No custody. No hot wallet tricks. It cannot spend your ₿. Download Bitkit for iOS and Android to intentionally spend your bitcoin.",
     },
     {
+      icon: "shield",
       question: "How do I stay extra private?",
       answer:
         "Watch-only is safer, but not invisible. Address lookups still touch public APIs, so use a fresh browser profile, VPN, or Tor when you want more distance.",
@@ -257,6 +264,7 @@
   let bannerTimerTarget = null;
   let addressFeedbackFadeTimer = 0;
   let addressFeedbackHideTimer = 0;
+  let addressCopyTimer = 0;
   let overviewDetailPreloadPromise = null;
   let activeDetailPreloadPromise = null;
   let overviewCardRefreshInProgress = false;
@@ -337,6 +345,7 @@
       banner: null,
       headerStatus: "",
       headerStatusTone: "default",
+      copiedAddressId: null,
       currentView: "watch",
       currentFactIndex: null,
       lastFactsWalletId: null,
@@ -351,6 +360,9 @@
       transactionVisibleCountByDetailId: {},
       selectedTransactionTxid: null,
       expandedTechnicalTransactionTxid: null,
+      loadingTechnicalTransactionTxid: null,
+      failedTechnicalTransactionTxids: new Set(),
+      transactionDetailsByTxid: new Map(),
       transactionTechnicalAnimationTimer: null,
     };
   }
@@ -366,6 +378,9 @@
       ...cachedRuntime,
       hasLoadedOnce: cachedRuntime.addressSnapshots.length > 0,
     };
+    if (cachedRuntime.rebuiltTimelines) {
+      StorageLayer.saveRuntimeCache(runtime);
+    }
   }
 
   function hydrateBakedDemoRuntimeIfNeeded() {
@@ -374,9 +389,17 @@
     }
 
     const bakedRuntime = SATOSHI_BAKED_SNAPSHOT.runtimeCache;
+    const bakedEntries = state.addresses.filter((entry) =>
+      Object.prototype.hasOwnProperty.call(SATOSHI_BAKED_SNAPSHOT.balancesByAddress, entry.address)
+    );
+    if (!bakedEntries.length) {
+      return false;
+    }
+
     const shouldUseBakedDetails =
       bakedRuntime &&
-      (!hasCompleteCachedCoverage() || !hasCompleteDetailCoverage(bakedRuntime.historyScope));
+      (!hasCompleteCachedCoverage(bakedEntries) ||
+        !hasCompleteDetailCoverage(bakedRuntime.historyScope, bakedEntries));
     if (runtime.addressSnapshots.length && !shouldUseBakedDetails) {
       return false;
     }
@@ -396,50 +419,46 @@
     const intradayEnd = Number.isFinite(bakedRuntime?.intradayEnd)
       ? bakedRuntime.intradayEnd
       : null;
-    const snapshots = state.addresses
-      .filter((entry) =>
-        Object.prototype.hasOwnProperty.call(SATOSHI_BAKED_SNAPSHOT.balancesByAddress, entry.address)
-      )
-      .map((entry) => {
-        const bakedSnapshot = bakedRuntime?.snapshotsByAddress.get(entry.address);
-        if (!bakedSnapshot) {
-          return PortfolioLayer.buildSummarySnapshot({
-            entry,
-            provider: "Baked Demo Cache",
-            balanceSats: SATOSHI_BAKED_SNAPSHOT.balancesByAddress[entry.address],
-            currentPriceUsd,
-          });
-        }
-
-        const txEvents = bakedSnapshot.txEvents;
-        return {
+    const snapshots = bakedEntries.map((entry) => {
+      const bakedSnapshot = bakedRuntime?.snapshotsByAddress.get(entry.address);
+      if (!bakedSnapshot) {
+        return PortfolioLayer.buildSummarySnapshot({
           entry,
-          provider: bakedSnapshot.provider,
-          balanceSats: bakedSnapshot.balanceSats,
-          usdValue: (bakedSnapshot.balanceSats / 1e8) * currentPriceUsd,
-          txEvents,
-          balanceTimeline:
-            bakedSnapshot.balanceTimeline.length || !Number.isFinite(timelineStart) || !Number.isFinite(timelineEnd)
-              ? bakedSnapshot.balanceTimeline
-              : buildDailyBalanceTimeline(bakedSnapshot.balanceSats, txEvents, timelineStart, timelineEnd),
-          hourlyBalanceTimeline:
-            bakedSnapshot.hourlyBalanceTimeline.length ||
-            !Number.isFinite(intradayStart) ||
-            !Number.isFinite(intradayEnd)
-              ? bakedSnapshot.hourlyBalanceTimeline
-              : buildIntervalBalanceTimeline(
-                  bakedSnapshot.balanceSats,
-                  txEvents,
-                  intradayStart,
-                  intradayEnd,
-                  HOUR_MS,
-                  startOfUtcHour,
-                  toHourKey
-                ),
-          approximate: bakedSnapshot.approximate,
-          detailScope: bakedSnapshot.detailScope,
-        };
-      });
+          provider: "Baked Demo Cache",
+          balanceSats: SATOSHI_BAKED_SNAPSHOT.balancesByAddress[entry.address],
+          currentPriceUsd,
+        });
+      }
+
+      const txEvents = bakedSnapshot.txEvents;
+      return {
+        entry,
+        provider: bakedSnapshot.provider,
+        balanceSats: bakedSnapshot.balanceSats,
+        usdValue: (bakedSnapshot.balanceSats / 1e8) * currentPriceUsd,
+        txEvents,
+        balanceTimeline:
+          bakedSnapshot.balanceTimeline.length || !Number.isFinite(timelineStart) || !Number.isFinite(timelineEnd)
+            ? bakedSnapshot.balanceTimeline
+            : buildDailyBalanceTimeline(bakedSnapshot.balanceSats, txEvents, timelineStart, timelineEnd),
+        hourlyBalanceTimeline:
+          bakedSnapshot.hourlyBalanceTimeline.length ||
+          !Number.isFinite(intradayStart) ||
+          !Number.isFinite(intradayEnd)
+            ? bakedSnapshot.hourlyBalanceTimeline
+            : buildIntervalBalanceTimeline(
+                bakedSnapshot.balanceSats,
+                txEvents,
+                intradayStart,
+                intradayEnd,
+                HOUR_MS,
+                startOfUtcHour,
+                toHourKey
+              ),
+        approximate: bakedSnapshot.approximate,
+        detailScope: bakedSnapshot.detailScope,
+      };
+    });
 
     if (!snapshots.length) {
       return false;
@@ -575,7 +594,10 @@
       render();
     });
 
-    dom.overviewFaqButton.addEventListener("click", openFaq);
+    dom.overviewFaqButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      openFaq();
+    });
     dom.settingsButton.addEventListener("click", openSettingsModal);
     dom.faqButton.addEventListener("click", () => {
       if (isFaqView()) {
@@ -897,6 +919,17 @@
       }
 
       const nextRange = normalizeChartRange(button.dataset.range);
+      const activeWallet = getActiveWallet();
+      const activeAddress = getActiveAddress();
+      const detailView = activeAddress
+        ? getAddressView(activeAddress.id)
+        : activeWallet
+          ? getWalletView(activeWallet.id)
+          : null;
+      if (button.hidden || !getAvailableChartRanges(detailView).has(nextRange)) {
+        return;
+      }
+
       if (nextRange === state.selectedRange) {
         return;
       }
@@ -1048,12 +1081,25 @@
     }
     render();
 
-    const isOverviewFastRefresh = !getActiveWallet() && reason !== "detail-preload";
-    const shouldPreloadOverviewDetail = isOverviewFastRefresh && shouldPreloadOverviewDetailInBackground();
-    const requestedHistoryScope = isOverviewFastRefresh
+    const isOverviewRefresh = !getActiveWallet() && reason !== "detail-preload";
+    const isManualOverviewRefresh = isOverviewRefresh && reason === "manual";
+    const bundledSatoshiDemoGroupId = isOverviewRefresh ? getBundledSatoshiDemoGroupId() : null;
+    const refreshEntries = bundledSatoshiDemoGroupId
+      ? state.addresses.filter((entry) => entry.groupId !== bundledSatoshiDemoGroupId)
+      : state.addresses;
+    if (!refreshEntries.length && bundledSatoshiDemoGroupId) {
+      overviewCardRefreshInProgress = false;
+      return refreshBundledSatoshiDemoManually(bundledSatoshiDemoGroupId);
+    }
+
+    const requestedHistoryScope = isOverviewRefresh && !isManualOverviewRefresh
       ? "SUMMARY"
       : getFullHistoryScopeForBackground();
-    const startTimestamp = isOverviewFastRefresh
+    const shouldPreloadOverviewDetail =
+      isOverviewRefresh &&
+      requestedHistoryScope !== getFullHistoryScopeForBackground() &&
+      shouldPreloadOverviewDetailInBackground();
+    const startTimestamp = requestedHistoryScope === "SUMMARY"
       ? startOfUtcHour(Date.now() - 23 * HOUR_MS)
       : requestedHistoryScope === "ALL"
         ? 0
@@ -1062,7 +1108,7 @@
 
     try {
       const addressResults = await allSettledWithConcurrency(
-        state.addresses,
+        refreshEntries,
         MAX_EXPLORER_CONCURRENCY,
         (entry) => APILayer.fetchAddressBundle(entry.address, startTimestamp)
       );
@@ -1083,7 +1129,7 @@
       let approximationMode = false;
 
       addressResults.forEach((result, index) => {
-        const entry = state.addresses[index];
+        const entry = refreshEntries[index];
         if (result.status === "fulfilled") {
           const snapshot = PortfolioLayer.buildAddressSnapshot({
             entry,
@@ -1137,6 +1183,13 @@
         bannerParts.push("Historical BTC/USD data has gaps, so some wallet growth points are approximate.");
       }
 
+      const retainedSnapshots = bundledSatoshiDemoGroupId
+        ? runtime.addressSnapshots.filter(
+            (snapshot) => snapshot?.entry?.groupId === bundledSatoshiDemoGroupId
+          )
+        : [];
+      const nextAddressSnapshots = [...retainedSnapshots, ...snapshots];
+
       runtime = {
         ...runtime,
         isLoading: false,
@@ -1160,10 +1213,10 @@
         intradayPriceHistory: marketData.intradayPriceHistory,
         historyAvailable: marketData.historyAvailable,
         historyMissingDays: marketData.historyMissingDays,
-        addressSnapshots: snapshots,
+        addressSnapshots: nextAddressSnapshots,
         partialFailures,
         approximationMode,
-        historyScope: requestedHistoryScope,
+        historyScope: pickHigherHistoryScope(runtime.historyScope, requestedHistoryScope),
         banner: bannerParts.length
           ? {
               tone: "warning",
@@ -1179,7 +1232,7 @@
 
       state.lastUpdated = new Date().toISOString();
       markBundledSatoshiDemoRefreshedIfComplete(
-        state.addresses,
+        refreshEntries,
         snapshots,
         state.lastUpdated,
         requestedHistoryScope
@@ -1190,6 +1243,9 @@
       render();
       if (shouldPreloadOverviewDetail) {
         preloadOverviewDetailDataIfNeeded({ force: true });
+      }
+      if (isManualOverviewRefresh && bundledSatoshiDemoGroupId) {
+        await refreshBundledSatoshiDemoManually(bundledSatoshiDemoGroupId);
       }
     } catch (error) {
       runtime.isLoading = false;
@@ -1512,24 +1568,24 @@
     const activeWallet = getActiveWallet();
     const activeAddress = getActiveAddress();
     const isEditing = Boolean(activeWallet && runtime.editingWalletId === activeWallet.id);
-    const showCopyStatus =
-      Boolean(activeAddress) && runtime.headerStatusTone === "success" && Boolean(runtime.headerStatus);
+    const showCopiedAddress = Boolean(activeAddress && runtime.copiedAddressId === activeAddress.id);
     const faqOpen = isFaqView();
 
-    dom.headerStatus.hidden = !runtime.headerStatus || showCopyStatus;
+    dom.headerStatus.hidden = !runtime.headerStatus;
     dom.headerStatus.className = `topbar-status text-meta${
       runtime.headerStatusTone === "success" ? " is-success" : ""
     }`;
-    dom.headerStatus.textContent = showCopyStatus ? "" : runtime.headerStatus || "";
+    dom.headerStatus.textContent = runtime.headerStatus || "";
     dom.faqHeaderDivider.hidden = !faqOpen;
     dom.faqCrumb.hidden = !faqOpen;
     dom.walletHeaderDivider.hidden = !activeWallet;
     dom.walletCrumb.hidden = !activeWallet;
     dom.addressHeaderDivider.hidden = !activeAddress;
     dom.addressCrumb.hidden = !activeAddress;
-    dom.addressStatusDivider.hidden = !showCopyStatus;
-    dom.addressCopyStatus.hidden = !showCopyStatus;
-    dom.addressCopyStatus.textContent = showCopyStatus ? runtime.headerStatus : "";
+    dom.addressCrumb.classList.toggle("is-copied", showCopiedAddress);
+    dom.addressStatusDivider.hidden = true;
+    dom.addressCopyStatus.hidden = true;
+    dom.addressCopyStatus.textContent = "";
     dom.walletTitleButton.classList.toggle("is-editing", isEditing);
     dom.walletTitleButton.classList.toggle("is-back", Boolean(activeAddress));
     dom.walletDeleteButton.hidden = !activeWallet || Boolean(activeAddress);
@@ -1567,8 +1623,16 @@
       activeAddress ? `Copy address ${activeAddress.address}` : "Copy address"
     );
     dom.addressCrumb.title = activeAddress ? "Copy address" : "";
-    dom.addressCrumbTextFull.textContent = activeAddress ? getAddressHeaderCrumbFullLabel(activeAddress) : "";
-    dom.addressCrumbTextShort.textContent = activeAddress ? getAddressHeaderCrumbLabel(activeAddress) : "";
+    dom.addressCrumbTextFull.textContent = showCopiedAddress
+      ? "copied address to clipboard"
+      : activeAddress
+        ? getAddressHeaderCrumbFullLabel(activeAddress)
+        : "";
+    dom.addressCrumbTextShort.textContent = showCopiedAddress
+      ? "copied"
+      : activeAddress
+        ? getAddressHeaderCrumbLabel(activeAddress)
+        : "";
   }
 
   function renderSettingsModal() {
@@ -1665,10 +1729,19 @@
       return;
     }
 
-    const detailView = activeAddress ? getAddressView(activeAddress.id) : getWalletView(activeWallet.id);
+    let detailView = activeAddress ? getAddressView(activeAddress.id) : getWalletView(activeWallet.id);
     if (!detailView) {
       clearAddressFeedback();
       return;
+    }
+    const previousSelectedRange = state.selectedRange;
+    applyAvailableChartRanges(detailView);
+    if (state.selectedRange !== previousSelectedRange) {
+      detailView = activeAddress ? getAddressView(activeAddress.id) : getWalletView(activeWallet.id);
+      if (!detailView) {
+        clearAddressFeedback();
+        return;
+      }
     }
     const loadingWallet = runtime.isLoading && !runtime.hasLoadedOnce && state.addresses.length > 0;
     const loadingDetail = !detailView.hasDetailData && detailView.monitoredCount > 0;
@@ -1681,7 +1754,10 @@
     const visibleTransactionCount = getVisibleTransactionCount(detailKey);
     const chartKicker = activeAddress ? "ADDRESS GROWTH" : "WALLET GROWTH";
     const showEmptyAddressWarning = !activeAddress && detailView.addresses.length === 0;
-    renderChartTabs();
+    setChartTabsVisible(!loadingWallet && !loadingDetail);
+    if (!loadingWallet && !loadingDetail) {
+      renderChartTabs(detailView);
+    }
     renderBitcoinFactsWidget(activeAddress);
     dom.addressTagsSection.hidden = !activeAddress;
     dom.walletAddressesSection.hidden = Boolean(activeAddress);
@@ -1751,6 +1827,7 @@
         dom.chartModal.hidden = false;
         dom.chartModalKicker.textContent = detailView.address ? "ADDRESS GROWTH" : "WALLET GROWTH";
         dom.chartModalTitleSymbol.textContent = chartDisplay.symbol;
+        dom.chartModalTabs.hidden = true;
         renderChartTitleText(dom.chartModalTitleText, null);
         renderChartGrowthStat(dom.chartModalGrowth, null);
         delete dom.chartModalStage.dataset.tone;
@@ -1769,6 +1846,11 @@
     renderTransactionModal(activeWallet, activeAddress, detailView.activity);
   }
 
+  function setChartTabsVisible(isVisible) {
+    dom.walletChartTabs.hidden = !isVisible;
+    dom.chartModalTabs.hidden = !isVisible;
+  }
+
   function renderTransactionControls({ remainingTransactions = 0, hasTruncatedActivity = false } = {}) {
     const showButton = remainingTransactions > 0;
     const showLimitNote = Boolean(hasTruncatedActivity);
@@ -1784,6 +1866,7 @@
   function renderChartModal(activeWallet, detailView, chartDisplay) {
     if (!runtime.chartModalOpen || !activeWallet || !detailView) {
       dom.chartModal.hidden = true;
+      dom.chartModalTabs.hidden = true;
       dom.chartModalStage.innerHTML = "";
       renderChartTitleText(dom.chartModalTitleText, null);
       renderChartGrowthStat(dom.chartModalGrowth, null);
@@ -1791,6 +1874,7 @@
     }
 
     dom.chartModal.hidden = false;
+    dom.chartModalTabs.hidden = false;
     dom.chartModalKicker.textContent = detailView.address ? "ADDRESS GROWTH" : "WALLET GROWTH";
     dom.chartModalTitleSymbol.textContent = chartDisplay.symbol;
     renderChartTitleText(dom.chartModalTitleText, chartDisplay);
@@ -1899,6 +1983,10 @@
 
     const activeAddress = getActiveAddress();
     const detailView = activeAddress ? getAddressView(activeAddress.id) : getWalletView(activeWallet.id);
+    if (detailView) {
+      applyAvailableChartRanges(detailView);
+      renderChartTabs(detailView);
+    }
     const chartDisplay =
       detailView && detailView.hasDetailData && detailView.monitoredCount > 0
         ? getWalletChartDisplay(detailView)
@@ -1923,14 +2011,217 @@
     }
   }
 
-  function renderChartTabs() {
+  function renderChartTabs(detailView = null) {
+    const availableRanges = getAvailableChartRanges(detailView);
     [dom.walletChartTabs, dom.chartModalTabs].forEach((tablist) => {
       Array.from(tablist.querySelectorAll("[data-range]")).forEach((button) => {
-        const isActive = normalizeChartRange(button.dataset.range) === state.selectedRange;
+        const range = normalizeChartRange(button.dataset.range);
+        const isAvailable = availableRanges.has(range);
+        const isActive = range === state.selectedRange;
+        button.hidden = !isAvailable;
         button.classList.toggle("is-active", isActive);
         button.setAttribute("aria-selected", String(isActive));
       });
     });
+  }
+
+  function applyAvailableChartRanges(detailView) {
+    const availableRanges = getAvailableChartRanges(detailView);
+    const currentRange = normalizeChartRange(state.selectedRange);
+    if (availableRanges.has(currentRange)) {
+      if (state.selectedRange !== currentRange) {
+        state.selectedRange = currentRange;
+        StorageLayer.saveState(state);
+      }
+      return;
+    }
+
+    state.selectedRange = getFallbackChartRange(detailView, availableRanges);
+    StorageLayer.saveState(state);
+  }
+
+  function getAvailableChartRanges(detailView) {
+    if (Array.isArray(detailView?.availableChartRanges)) {
+      return new Set(detailView.availableChartRanges);
+    }
+
+    const ranges = new Set();
+    if (!detailView || detailView.monitoredCount <= 0) {
+      ranges.add("30D");
+      return ranges;
+    }
+
+    if (detailView.hasReliableIntradayTimeline && hasRenderableChartRange(detailView.intradayTimeline)) {
+      ranges.add("1D");
+    }
+
+    if (hasReliableDailyCoverage(detailView, 30)) {
+      ranges.add("30D");
+    }
+
+    if (hasReliableDailyCoverage(detailView, 365) && !shouldHideOneYearRangeForDetail(detailView)) {
+      ranges.add("1Y");
+    }
+
+    if (shouldShowAllRangeForDetail(detailView)) {
+      ranges.add("ALL");
+    }
+
+    if (!ranges.size) {
+      ranges.add("30D");
+    }
+    return ranges;
+  }
+
+  function getFallbackChartRange(detailView, availableRanges) {
+    if (shouldHideOneYearRangeForDetail(detailView) && availableRanges.has("ALL")) {
+      return "ALL";
+    }
+
+    for (const range of ["30D", "1D", "ALL", "1Y"]) {
+      if (availableRanges.has(range)) {
+        return range;
+      }
+    }
+
+    return "30D";
+  }
+
+  function getAvailableChartRangesForSnapshots({ snapshots, expectedCount, wallet, address }) {
+    const source = Array.isArray(snapshots) ? snapshots.filter(Boolean) : [];
+    if (!expectedCount || source.length !== expectedCount) {
+      return [];
+    }
+
+    const ranges = new Set();
+    const commonIntradayCoverage = getCommonTimelineCoverage(source, "hourlyBalanceTimeline");
+    if (commonIntradayCoverage && commonIntradayCoverage.end - commonIntradayCoverage.start >= HOUR_MS) {
+      ranges.add("1D");
+    }
+
+    const commonDailyCoverage = getCommonReliableDailyCoverage(source);
+    if (commonDailyCoverage && source.every((snapshot) => hasScopeCoverage(snapshot.detailScope, "30D"))) {
+      if (commonDailyCoverage.end - commonDailyCoverage.start >= 29 * DAY_MS) {
+        ranges.add("30D");
+      }
+    }
+
+    const isSatoshiDemo = Boolean(wallet && isBundledSatoshiDemoGroup(wallet.id));
+    const hasApproximate = source.some((snapshot) => snapshot?.approximate);
+    if (
+      commonDailyCoverage &&
+      !isSatoshiDemo &&
+      source.every((snapshot) => hasScopeCoverage(snapshot.detailScope, "1Y")) &&
+      commonDailyCoverage.end - commonDailyCoverage.start >= 364 * DAY_MS
+    ) {
+      ranges.add("1Y");
+    }
+
+    if (
+      commonDailyCoverage &&
+      source.every((snapshot) => hasScopeCoverage(snapshot.detailScope, "ALL")) &&
+      (!hasApproximate || isSatoshiDemo)
+    ) {
+      ranges.add("ALL");
+    }
+
+    return [...ranges];
+  }
+
+  function getCommonReliableDailyCoverage(snapshots) {
+    const coverages = (Array.isArray(snapshots) ? snapshots : [])
+      .map((snapshot) => {
+        const coverage = getTimelineCoverage(snapshot?.balanceTimeline);
+        if (!coverage) {
+          return null;
+        }
+
+        const oldestKnownTimestamp = snapshot?.approximate
+          ? getOldestKnownTransactionTimestamp(snapshot)
+          : null;
+        return {
+          start: Number.isFinite(oldestKnownTimestamp)
+            ? Math.max(coverage.start, startOfUtcDay(oldestKnownTimestamp))
+            : coverage.start,
+          end: coverage.end,
+        };
+      })
+      .filter(Boolean);
+    return getCommonCoverage(coverages);
+  }
+
+  function getCommonTimelineCoverage(snapshots, timelineKey) {
+    const coverages = (Array.isArray(snapshots) ? snapshots : [])
+      .map((snapshot) => getTimelineCoverage(snapshot?.[timelineKey]))
+      .filter(Boolean);
+    return getCommonCoverage(coverages);
+  }
+
+  function getTimelineCoverage(points) {
+    const timestamps = Array.isArray(points)
+      ? points.map((point) => Number(point?.timestamp)).filter(Number.isFinite)
+      : [];
+    if (timestamps.length < 2) {
+      return null;
+    }
+
+    return {
+      start: Math.min(...timestamps),
+      end: Math.max(...timestamps),
+    };
+  }
+
+  function getCommonCoverage(coverages) {
+    const source = Array.isArray(coverages) ? coverages : [];
+    if (!source.length) {
+      return null;
+    }
+
+    const start = Math.max(...source.map((coverage) => coverage.start));
+    const end = Math.min(...source.map((coverage) => coverage.end));
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      return null;
+    }
+
+    return { start, end };
+  }
+
+  function hasRenderableChartRange(points) {
+    return Array.isArray(points) && points.filter((point) => Number.isFinite(point?.timestamp)).length >= 2;
+  }
+
+  function hasReliableDailyCoverage(detailView, days) {
+    if (!detailView?.hasReliableDailyTimeline || !hasRenderableChartRange(detailView?.dailyTimeline)) {
+      return false;
+    }
+
+    const start = Number(detailView.chartCoverageStart);
+    const end = Number(detailView.chartCoverageEnd);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      return false;
+    }
+
+    return end - start >= (days - 1) * DAY_MS;
+  }
+
+  function shouldShowAllRangeForDetail(detailView) {
+    if (!detailView?.hasReliableDailyTimeline || !hasRenderableChartRange(detailView?.dailyTimeline)) {
+      return false;
+    }
+
+    if (!detailView.hasApproximateChartData) {
+      return true;
+    }
+
+    return Boolean(detailView.wallet && isBundledSatoshiDemoGroup(detailView.wallet.id));
+  }
+
+  function shouldHideOneYearRangeForDetail(detailView) {
+    if (!detailView?.wallet || !isBundledSatoshiDemoGroup(detailView.wallet.id)) {
+      return false;
+    }
+
+    return Boolean(detailView.hasApproximateChartData);
   }
 
   function buildWalletCard(summary) {
@@ -1989,6 +2280,7 @@
   function buildFaqCard(item) {
     return `
       <article class="panel faq-card">
+        <span class="faq-card-icon" aria-hidden="true">${getFaqIconMarkup(item.icon)}</span>
         <div class="faq-card-copy">
           <h3 class="faq-card-question">${escapeHtml(item.question)}</h3>
           <p class="faq-card-answer">${escapeHtml(item.answer)}</p>
@@ -2243,8 +2535,10 @@
     }
 
     runtime.expandedTechnicalTransactionTxid = txid;
+    runtime.failedTechnicalTransactionTxids.delete(txid);
     syncTransactionTechnicalButton(toggleButton, true);
     dom.transactionModalBody.classList.add("is-technical-expanded");
+    loadTransactionTechnicalDetailsIfNeeded(txid);
 
     window.requestAnimationFrame(() => {
       const technicalSection = dom.transactionModalBody.querySelector("[data-role='transaction-technical']");
@@ -2256,19 +2550,47 @@
     });
   }
 
+  async function loadTransactionTechnicalDetailsIfNeeded(txid) {
+    const transaction = getActiveWalletTransaction(txid);
+    if (!transaction || hasTransactionTechnicalAddresses(transaction) || runtime.transactionDetailsByTxid.has(txid)) {
+      return;
+    }
+
+    runtime.loadingTechnicalTransactionTxid = txid;
+    render();
+    try {
+      const result = await APILayer.fetchTransactionDetails(txid);
+      runtime.transactionDetailsByTxid.set(txid, result.details);
+      runtime.failedTechnicalTransactionTxids.delete(txid);
+      StorageLayer.saveRuntimeCache(runtime);
+    } catch (error) {
+      runtime.failedTechnicalTransactionTxids.add(txid);
+    } finally {
+      if (runtime.loadingTechnicalTransactionTxid === txid) {
+        runtime.loadingTechnicalTransactionTxid = null;
+      }
+      render();
+    }
+  }
+
   function buildTransactionDetailMarkup(wallet, item) {
+    const enrichedItem = getTransactionWithTechnicalDetails(item);
     const summaryAmount = getTransactionSummaryAmount(item);
     const valueMetrics = getTransactionValueMetrics(item);
-    const technicalMetrics = getTransactionTechnicalMetrics(item);
+    const technicalMetrics = getTransactionTechnicalMetrics(enrichedItem);
     const isExpanded = runtime.expandedTechnicalTransactionTxid === item.txid;
-    const isTechnicalLoading = false;
+    const isTechnicalLoading = runtime.loadingTechnicalTransactionTxid === item.txid;
+    const isTechnicalFailed = runtime.failedTechnicalTransactionTxids.has(item.txid);
     const statusTone = item.confirmed ? "is-confirmed" : "is-pending";
     const technicalButtonLabel = isExpanded ? "Hide Technical Details" : "Technical Details";
     const technicalButtonIcon = isExpanded ? getEyeSlashIconMarkup() : getEyeIconMarkup();
-    const inputAddresses = Array.isArray(item.inputAddresses) ? item.inputAddresses : [];
-    const outputAddresses = Array.isArray(item.outputAddresses) ? item.outputAddresses : [];
-    const inputHighlights = new Set(item.walletInputAddresses || []);
-    const outputHighlights = new Set(item.walletOutputAddresses || []);
+    const inputAddresses = Array.isArray(enrichedItem.inputAddresses) ? enrichedItem.inputAddresses : [];
+    const outputAddresses = Array.isArray(enrichedItem.outputAddresses) ? enrichedItem.outputAddresses : [];
+    const inputHighlights = new Set(enrichedItem.walletInputAddresses || []);
+    const outputHighlights = new Set(enrichedItem.walletOutputAddresses || []);
+    const addressDetailsUnavailable =
+      !isTechnicalLoading &&
+      (isTechnicalFailed || (enrichedItem.hasAddressDetails === false && !inputAddresses.length && !outputAddresses.length));
 
     return `
       <div class="transaction-modal-summary">
@@ -2347,14 +2669,16 @@
 
         <div class="transaction-modal-detail-stack">
           ${buildTransactionTechnicalMarkup(
-            item,
+            enrichedItem,
             technicalMetrics,
             inputAddresses,
             outputAddresses,
             inputHighlights,
             outputHighlights,
             isExpanded,
-            isTechnicalLoading
+            isTechnicalLoading,
+            addressDetailsUnavailable,
+            isTechnicalFailed
           )}
 
           <div class="transaction-modal-actions">
@@ -2392,7 +2716,9 @@
     inputHighlights = new Set(item.walletInputAddresses || []),
     outputHighlights = new Set(item.walletOutputAddresses || []),
     expanded = false,
-    isLoading = false
+    isLoading = false,
+    addressDetailsUnavailable = false,
+    isFailed = false
   ) {
     const inputCountLabel = isLoading && !inputAddresses.length ? "..." : inputAddresses.length;
     const outputCountLabel = isLoading && !outputAddresses.length ? "..." : outputAddresses.length;
@@ -2425,14 +2751,26 @@
           <div class="transaction-technical-group">
             <p class="text-label transaction-technical-heading">Input Addresses (${inputCountLabel})</p>
             <div class="transaction-technical-list">
-              ${buildTransactionTechnicalAddressLines(inputAddresses, inputHighlights, isLoading)}
+              ${buildTransactionTechnicalAddressLines(
+                inputAddresses,
+                inputHighlights,
+                isLoading,
+                addressDetailsUnavailable,
+                isFailed
+              )}
             </div>
           </div>
 
           <div class="transaction-technical-group">
             <p class="text-label transaction-technical-heading">Output Addresses (${outputCountLabel})</p>
             <div class="transaction-technical-list">
-              ${buildTransactionTechnicalAddressLines(outputAddresses, outputHighlights, isLoading)}
+              ${buildTransactionTechnicalAddressLines(
+                outputAddresses,
+                outputHighlights,
+                isLoading,
+                addressDetailsUnavailable,
+                isFailed
+              )}
             </div>
           </div>
         </div>
@@ -2474,12 +2812,24 @@
     return detailView?.activity.find((entry) => entry.txid === txid) || null;
   }
 
-  function buildTransactionTechnicalAddressLines(addresses, highlighted = new Set(), isLoading = false) {
+  function buildTransactionTechnicalAddressLines(
+    addresses,
+    highlighted = new Set(),
+    isLoading = false,
+    addressDetailsUnavailable = false,
+    isFailed = false
+  ) {
     if (isLoading) {
       return `<p class="transaction-technical-value">Loading technical details...</p>`;
     }
 
     if (!addresses?.length) {
+      if (addressDetailsUnavailable) {
+        return `<p class="transaction-technical-value">${
+          isFailed ? "Could not load technical details." : "Not cached. Tap Technical Details to load."
+        }</p>`;
+      }
+
       return `<p class="transaction-technical-value">Unavailable</p>`;
     }
 
@@ -2505,6 +2855,65 @@
         )}</p>`;
       })
       .join("");
+  }
+
+  function getTransactionWithTechnicalDetails(item) {
+    if (!item?.txid) {
+      return item;
+    }
+
+    if (hasTransactionTechnicalAddresses(item)) {
+      return item;
+    }
+
+    const details = runtime.transactionDetailsByTxid.get(item.txid);
+    if (!details) {
+      return {
+        ...item,
+        hasAddressDetails: false,
+      };
+    }
+
+    const activeAddresses = getActiveDetailAddressSet();
+    const inputAddresses = Array.isArray(details.inputAddresses) ? details.inputAddresses : [];
+    const outputAddresses = Array.isArray(details.outputAddresses) ? details.outputAddresses : [];
+    return {
+      ...item,
+      feeSats: Number.isFinite(details.feeSats) ? details.feeSats : item.feeSats,
+      feeRateSatVb: Number.isFinite(details.feeRateSatVb)
+        ? details.feeRateSatVb
+        : item.feeRateSatVb,
+      inputAddresses,
+      outputAddresses,
+      walletInputAddresses: inputAddresses.filter((address) => activeAddresses.has(address)),
+      walletOutputAddresses: outputAddresses.filter((address) => activeAddresses.has(address)),
+      hasAddressDetails: inputAddresses.length > 0 || outputAddresses.length > 0,
+    };
+  }
+
+  function hasTransactionTechnicalAddresses(item) {
+    return Boolean(
+      (Array.isArray(item?.inputAddresses) && item.inputAddresses.length > 0) ||
+        (Array.isArray(item?.outputAddresses) && item.outputAddresses.length > 0)
+    );
+  }
+
+  function getActiveDetailAddressSet() {
+    const activeAddress = getActiveAddress();
+    if (activeAddress) {
+      return new Set([activeAddress.address]);
+    }
+
+    const activeWallet = getActiveWallet();
+    if (!activeWallet) {
+      return new Set();
+    }
+
+    return new Set(
+      state.addresses
+        .filter((entry) => entry.groupId === activeWallet.id)
+        .map((entry) => entry.address)
+    );
   }
 
   function getSavedAddressIdByValue(addressValue) {
@@ -2575,21 +2984,20 @@
         totalBtc: totals.balanceSats / 1e8,
         totalUsd: totals.usdValue,
         miniChartMarkup:
-          !isSatoshiDemoIncrementalRefresh &&
-          !showOverviewRefreshPlaceholder &&
-          miniChartScene
+          !showOverviewRefreshPlaceholder && miniChartScene
             ? miniChartScene.markup
             : "",
         hasMiniChart:
           Boolean(miniChartScene) &&
-          !isSatoshiDemoIncrementalRefresh &&
           !showOverviewRefreshPlaceholder,
         showMiniChartPlaceholder:
-          isSatoshiDemoIncrementalRefresh ||
           showOverviewRefreshPlaceholder ||
           (!miniChartScene &&
             addresses.length > 0 &&
-            (runtime.isLoading || runtime.isRefreshing || !runtime.hasLoadedOnce)),
+            (runtime.isLoading ||
+              runtime.isRefreshing ||
+              isSatoshiDemoIncrementalRefresh ||
+              !runtime.hasLoadedOnce)),
         isBalanceLoading:
           addresses.length > 0 &&
           snapshots.length < addresses.length &&
@@ -2617,6 +3025,12 @@
     const snapshots = addresses
       .map((entry) => snapshotsById.get(entry.id))
       .filter(Boolean);
+    const availableChartRanges = getAvailableChartRangesForSnapshots({
+      snapshots,
+      expectedCount: addresses.length,
+      wallet,
+      address: null,
+    });
     const detailSnapshots = snapshots.filter((snapshot) =>
       hasRequiredDetailScope(snapshot, requiredDetailScope)
     );
@@ -2624,10 +3038,15 @@
     const totals = PortfolioLayer.calculateTotals(snapshots);
 
     let dailyTimeline = [];
-    if (hasDetailData && runtime.timelineStart && runtime.timelineEnd) {
-      const reliableTimelineStart = getReliableTimelineStartForSnapshots(
+    let reliableTimelineStart = null;
+    let hasReliableDailyTimeline = false;
+    if (hasDetailData && Number.isFinite(runtime.timelineStart) && Number.isFinite(runtime.timelineEnd)) {
+      reliableTimelineStart = getReliableTimelineStartForSnapshots(
         detailSnapshots,
-        runtime.timelineStart
+        runtime.timelineStart,
+        {
+          trimToFirstTransaction: requiredDetailScope === "ALL",
+        }
       );
       dailyTimeline = PortfolioLayer.combineTimelines(
         detailSnapshots,
@@ -2635,13 +3054,18 @@
         reliableTimelineStart,
         runtime.timelineEnd
       );
+      hasReliableDailyTimeline = dailyTimeline.length >= 2;
     }
     if (!dailyTimeline.length && hasDetailData) {
       dailyTimeline = buildFlatTimeline(totals.balanceSats, runtime.currentPriceUsd);
     }
+    const chartCoverageStart = hasReliableDailyTimeline ? getTimelineStartTimestamp(dailyTimeline) : null;
+    const chartCoverageEnd = hasReliableDailyTimeline ? getTimelineEndTimestamp(dailyTimeline) : null;
+    const hasApproximateChartData = detailSnapshots.some((snapshot) => snapshot?.approximate);
 
     let intradayTimeline = [];
-    if (hasDetailData && runtime.intradayStart && runtime.intradayEnd) {
+    let hasReliableIntradayTimeline = false;
+    if (hasDetailData && Number.isFinite(runtime.intradayStart) && Number.isFinite(runtime.intradayEnd)) {
       intradayTimeline = combineSnapshotTimelines(
         detailSnapshots,
         "hourlyBalanceTimeline",
@@ -2654,6 +3078,7 @@
           keyForTimestamp: toHourKey,
         }
       );
+      hasReliableIntradayTimeline = intradayTimeline.length >= 2;
     }
     if (!intradayTimeline.length && hasDetailData) {
       intradayTimeline = buildFlatTimeline(
@@ -2673,6 +3098,12 @@
       totalUsd: totals.usdValue,
       dailyTimeline,
       intradayTimeline,
+      hasReliableDailyTimeline,
+      hasReliableIntradayTimeline,
+      chartCoverageStart,
+      chartCoverageEnd,
+      hasApproximateChartData,
+      availableChartRanges,
       hasDetailData,
       hasTruncatedActivity: hasUnsuppressedTruncatedSnapshots(detailSnapshots),
       activity: hasDetailData
@@ -2702,13 +3133,24 @@
         !snapshot && (runtime.isLoading || runtime.isRefreshing || !runtime.hasLoadedOnce),
     };
     const snapshots = snapshot ? [snapshot] : [];
+    const availableChartRanges = getAvailableChartRangesForSnapshots({
+      snapshots,
+      expectedCount: 1,
+      wallet,
+      address,
+    });
     const totals = PortfolioLayer.calculateTotals(snapshots);
 
     let dailyTimeline = [];
-    if (hasDetailData && runtime.timelineStart && runtime.timelineEnd) {
-      const reliableTimelineStart = getReliableTimelineStartForSnapshots(
+    let reliableTimelineStart = null;
+    let hasReliableDailyTimeline = false;
+    if (hasDetailData && Number.isFinite(runtime.timelineStart) && Number.isFinite(runtime.timelineEnd)) {
+      reliableTimelineStart = getReliableTimelineStartForSnapshots(
         snapshots,
-        runtime.timelineStart
+        runtime.timelineStart,
+        {
+          trimToFirstTransaction: requiredDetailScope === "ALL",
+        }
       );
       dailyTimeline = PortfolioLayer.combineTimelines(
         snapshots,
@@ -2716,13 +3158,18 @@
         reliableTimelineStart,
         runtime.timelineEnd
       );
+      hasReliableDailyTimeline = dailyTimeline.length >= 2;
     }
     if (!dailyTimeline.length && hasDetailData) {
       dailyTimeline = buildFlatTimeline(totals.balanceSats, runtime.currentPriceUsd);
     }
+    const chartCoverageStart = hasReliableDailyTimeline ? getTimelineStartTimestamp(dailyTimeline) : null;
+    const chartCoverageEnd = hasReliableDailyTimeline ? getTimelineEndTimestamp(dailyTimeline) : null;
+    const hasApproximateChartData = snapshots.some((snapshot) => snapshot?.approximate);
 
     let intradayTimeline = [];
-    if (hasDetailData && runtime.intradayStart && runtime.intradayEnd) {
+    let hasReliableIntradayTimeline = false;
+    if (hasDetailData && Number.isFinite(runtime.intradayStart) && Number.isFinite(runtime.intradayEnd)) {
       intradayTimeline = combineSnapshotTimelines(
         snapshots,
         "hourlyBalanceTimeline",
@@ -2735,6 +3182,7 @@
           keyForTimestamp: toHourKey,
         }
       );
+      hasReliableIntradayTimeline = intradayTimeline.length >= 2;
     }
     if (!intradayTimeline.length && hasDetailData) {
       intradayTimeline = buildFlatTimeline(
@@ -2754,6 +3202,12 @@
       totalUsd: totals.usdValue,
       dailyTimeline,
       intradayTimeline,
+      hasReliableDailyTimeline,
+      hasReliableIntradayTimeline,
+      chartCoverageStart,
+      chartCoverageEnd,
+      hasApproximateChartData,
+      availableChartRanges,
       hasDetailData,
       hasTruncatedActivity: hasUnsuppressedTruncatedSnapshots(snapshots),
       activity: hasDetailData
@@ -2826,22 +3280,29 @@
     return Date.now() - lastUpdatedAt > CACHE_MAX_AGE_MS;
   }
 
-  function hasCompleteCachedCoverage() {
-    if (!runtime.hasLoadedOnce || !runtime.addressSnapshots.length || !Number.isFinite(runtime.currentPriceUsd)) {
+  function hasCompleteCachedCoverage(entries = state.addresses) {
+    const scopedEntries = Array.isArray(entries) ? entries : [];
+    if (
+      !scopedEntries.length ||
+      !runtime.hasLoadedOnce ||
+      !runtime.addressSnapshots.length ||
+      !Number.isFinite(runtime.currentPriceUsd)
+    ) {
       return false;
     }
 
     const cachedIds = new Set(runtime.addressSnapshots.map((snapshot) => snapshot.entry.id));
-    return state.addresses.every((entry) => cachedIds.has(entry.id));
+    return scopedEntries.every((entry) => cachedIds.has(entry.id));
   }
 
-  function hasCompleteDetailCoverage(requiredScope) {
-    if (!hasCompleteCachedCoverage()) {
+  function hasCompleteDetailCoverage(requiredScope, entries = state.addresses) {
+    const scopedEntries = Array.isArray(entries) ? entries : [];
+    if (!hasCompleteCachedCoverage(scopedEntries)) {
       return false;
     }
 
     const snapshotsById = getSnapshotsById();
-    return state.addresses.every((entry) =>
+    return scopedEntries.every((entry) =>
       hasRequiredDetailScope(snapshotsById.get(entry.id), requiredScope)
     );
   }
@@ -2851,8 +3312,13 @@
       return false;
     }
 
+    const entries = getOverviewDetailPreloadEntries();
+    if (!entries.length) {
+      return false;
+    }
+
     const fullScope = getFullHistoryScopeForBackground();
-    return !hasCompleteCachedCoverage() || !hasCompleteDetailCoverage(fullScope) || isRuntimeCacheStale();
+    return !hasCompleteCachedCoverage(entries) || !hasCompleteDetailCoverage(fullScope, entries) || isRuntimeCacheStale();
   }
 
   function preloadOverviewDetailDataIfNeeded({ force = false } = {}) {
@@ -2864,7 +3330,12 @@
       return null;
     }
 
-    overviewDetailPreloadPromise = refreshScopedEntries(state.addresses, {
+    const entries = getOverviewDetailPreloadEntries();
+    if (!entries.length) {
+      return null;
+    }
+
+    overviewDetailPreloadPromise = refreshScopedEntries(entries, {
       reason: "overview-detail-preload",
       allowSkeleton: false,
       historyScopeOverride: getFullHistoryScopeForBackground(),
@@ -2876,6 +3347,13 @@
       });
 
     return overviewDetailPreloadPromise;
+  }
+
+  function getOverviewDetailPreloadEntries() {
+    const bundledSatoshiDemoGroupId = getBundledSatoshiDemoGroupId();
+    return bundledSatoshiDemoGroupId
+      ? state.addresses.filter((entry) => entry.groupId !== bundledSatoshiDemoGroupId)
+      : state.addresses;
   }
 
   function preloadActiveDetailDataIfNeeded() {
@@ -3211,19 +3689,33 @@
     );
   }
 
-  function getReliableTimelineStartForSnapshots(snapshots, fallbackStart) {
+  function getReliableTimelineStartForSnapshots(
+    snapshots,
+    fallbackStart,
+    { trimToFirstTransaction = false } = {}
+  ) {
     const fallback = Number.isFinite(fallbackStart) ? fallbackStart : null;
-    const approximateStarts = (Array.isArray(snapshots) ? snapshots : [])
+    const source = Array.isArray(snapshots) ? snapshots : [];
+    const allStarts = source
+      .map(getOldestKnownTransactionTimestamp)
+      .filter(Number.isFinite)
+      .map(startOfUtcDay);
+    const approximateStarts = source
       .filter((snapshot) => snapshot?.approximate)
       .map(getOldestKnownTransactionTimestamp)
       .filter(Number.isFinite)
       .map(startOfUtcDay);
 
-    if (!approximateStarts.length) {
-      return fallback;
+    let timelineStart = fallback;
+    if (trimToFirstTransaction && allStarts.length) {
+      timelineStart = Math.max(timelineStart || 0, Math.min(...allStarts));
     }
 
-    return Math.max(fallback || 0, ...approximateStarts);
+    if (approximateStarts.length) {
+      timelineStart = Math.max(timelineStart || 0, ...approximateStarts);
+    }
+
+    return timelineStart;
   }
 
   function getOldestKnownTransactionTimestamp(snapshot) {
@@ -3234,6 +3726,20 @@
       : [];
 
     return timestamps.length ? Math.min(...timestamps) : null;
+  }
+
+  function getTimelineStartTimestamp(points) {
+    const timestamps = Array.isArray(points)
+      ? points.map((point) => Number(point?.timestamp)).filter(Number.isFinite)
+      : [];
+    return timestamps.length ? Math.min(...timestamps) : null;
+  }
+
+  function getTimelineEndTimestamp(points) {
+    const timestamps = Array.isArray(points)
+      ? points.map((point) => Number(point?.timestamp)).filter(Number.isFinite)
+      : [];
+    return timestamps.length ? Math.max(...timestamps) : null;
   }
 
   function isBundledSatoshiDemoEntry(entry) {
@@ -3588,9 +4094,14 @@
     runtime.editingWalletId = null;
     runtime.walletNameDraft = "";
     runtime.chartModalOpen = false;
+    runtime.copiedAddressId = null;
     runtime.transactionVisibleCountByDetailId = {};
     runtime.selectedTransactionTxid = null;
     runtime.expandedTechnicalTransactionTxid = null;
+    if (addressCopyTimer) {
+      window.clearTimeout(addressCopyTimer);
+      addressCopyTimer = 0;
+    }
   }
 
   function buildViewHash(view = "watch", walletId = null, addressId = null) {
@@ -3868,12 +4379,26 @@
 
     try {
       await copyPlainTextToClipboard(activeAddress.address);
-      setBanner("success", "Address copied.");
+      showAddressCopiedInline(activeAddress.id);
       render();
     } catch (error) {
       setBanner("warning", "Copy failed. Try selecting the address manually.");
       render();
     }
+  }
+
+  function showAddressCopiedInline(addressId) {
+    if (addressCopyTimer) {
+      window.clearTimeout(addressCopyTimer);
+      addressCopyTimer = 0;
+    }
+
+    runtime.copiedAddressId = addressId;
+    addressCopyTimer = window.setTimeout(() => {
+      runtime.copiedAddressId = null;
+      addressCopyTimer = 0;
+      render();
+    }, 1000);
   }
 
   function enterWalletRename() {
@@ -4587,12 +5112,24 @@
     return [
       serializeRuntimeCache(currentRuntime),
       serializeRuntimeCache(currentRuntime, {
-        includeAddressDetails: false,
+        includeIntradayPriceHistory: false,
+        includeHourlyBalanceTimeline: false,
+      }),
+      serializeRuntimeCache(currentRuntime, {
+        includeIntradayPriceHistory: false,
+        includeHourlyBalanceTimeline: false,
+        maxTxEventsPerSnapshot: 500,
+      }),
+      serializeRuntimeCache(currentRuntime, {
+        includeIntradayPriceHistory: false,
+        includeHourlyBalanceTimeline: false,
+        maxTxEventsPerSnapshot: 120,
       }),
       serializeRuntimeCache(currentRuntime, {
         includeAddressDetails: false,
         includeIntradayPriceHistory: false,
         includeHourlyBalanceTimeline: false,
+        maxTxEventsPerSnapshot: 120,
       }),
       serializeRuntimeCache(currentRuntime, {
         includeAddressDetails: false,
@@ -4612,7 +5149,7 @@
   function serializeRuntimeCache(
     currentRuntime,
     {
-      includeAddressDetails = true,
+      includeAddressDetails = false,
       includeIntradayPriceHistory = true,
       includeHourlyBalanceTimeline = true,
       maxTxEventsPerSnapshot = Infinity,
@@ -4641,6 +5178,7 @@
       timelineEnd: Number.isFinite(currentRuntime.timelineEnd) ? currentRuntime.timelineEnd : null,
       intradayStart: Number.isFinite(currentRuntime.intradayStart) ? currentRuntime.intradayStart : null,
       intradayEnd: Number.isFinite(currentRuntime.intradayEnd) ? currentRuntime.intradayEnd : null,
+      transactionDetails: serializeTransactionDetailsMap(currentRuntime.transactionDetailsByTxid),
       addressSnapshots: currentRuntime.addressSnapshots.map((snapshot) => ({
         entryId: snapshot.entry?.id || null,
         provider: snapshot.provider || "",
@@ -4676,6 +5214,21 @@
       return null;
     }
 
+    const timelineStart = Number.isFinite(candidate.timelineStart) ? candidate.timelineStart : null;
+    const timelineEnd = Number.isFinite(candidate.timelineEnd) ? candidate.timelineEnd : null;
+    const intradayStart = Number.isFinite(candidate.intradayStart) ? candidate.intradayStart : null;
+    const intradayEnd = Number.isFinite(candidate.intradayEnd) ? candidate.intradayEnd : null;
+    let rebuiltTimelines = false;
+    snapshots.forEach((snapshot) => {
+      rebuiltTimelines =
+        rebuildCachedSnapshotTimelinesIfNeeded(snapshot, {
+          timelineStart,
+          timelineEnd,
+          intradayStart,
+          intradayEnd,
+        }) || rebuiltTimelines;
+    });
+
     return {
       historyScope: normalizeHistoryScope(candidate.historyScope),
       currentPriceUsd: Number.isFinite(candidate.currentPriceUsd) ? candidate.currentPriceUsd : null,
@@ -4685,12 +5238,92 @@
       historyAvailable: candidate.historyAvailable !== false,
       historyMissingDays: Number.isFinite(candidate.historyMissingDays) ? candidate.historyMissingDays : 0,
       approximationMode: Boolean(candidate.approximationMode),
-      timelineStart: Number.isFinite(candidate.timelineStart) ? candidate.timelineStart : null,
-      timelineEnd: Number.isFinite(candidate.timelineEnd) ? candidate.timelineEnd : null,
-      intradayStart: Number.isFinite(candidate.intradayStart) ? candidate.intradayStart : null,
-      intradayEnd: Number.isFinite(candidate.intradayEnd) ? candidate.intradayEnd : null,
+      timelineStart,
+      timelineEnd,
+      intradayStart,
+      intradayEnd,
       addressSnapshots: snapshots,
+      transactionDetailsByTxid: normalizeTransactionDetailsMap(candidate.transactionDetails),
+      rebuiltTimelines,
     };
+  }
+
+  function rebuildCachedSnapshotTimelinesIfNeeded(
+    snapshot,
+    { timelineStart, timelineEnd, intradayStart, intradayEnd }
+  ) {
+    if (!snapshot || normalizeSnapshotDetailScope(snapshot.detailScope) === "SUMMARY") {
+      return false;
+    }
+
+    let rebuilt = false;
+    if (
+      shouldRebuildCachedTimeline(snapshot.balanceTimeline, snapshot.txEvents, timelineStart, timelineEnd)
+    ) {
+      snapshot.balanceTimeline = buildDailyBalanceTimeline(
+        snapshot.balanceSats,
+        snapshot.txEvents,
+        timelineStart,
+        timelineEnd
+      );
+      rebuilt = true;
+    }
+
+    if (
+      shouldRebuildCachedTimeline(
+        snapshot.hourlyBalanceTimeline,
+        snapshot.txEvents,
+        intradayStart,
+        intradayEnd
+      )
+    ) {
+      snapshot.hourlyBalanceTimeline = buildIntervalBalanceTimeline(
+        snapshot.balanceSats,
+        snapshot.txEvents,
+        intradayStart,
+        intradayEnd,
+        HOUR_MS,
+        startOfUtcHour,
+        toHourKey
+      );
+      rebuilt = true;
+    }
+
+    return rebuilt;
+  }
+
+  function shouldRebuildCachedTimeline(points, txEvents, startTimestamp, endTimestamp) {
+    if (!Number.isFinite(startTimestamp) || !Number.isFinite(endTimestamp)) {
+      return false;
+    }
+
+    const events = Array.isArray(txEvents) ? txEvents : [];
+    if (!events.length) {
+      return false;
+    }
+
+    const validPoints = Array.isArray(points)
+      ? points.filter((point) => Number.isFinite(point?.timestamp) && Number.isFinite(point?.balanceSats))
+      : [];
+    if (!validPoints.length) {
+      return true;
+    }
+
+    const uniqueBalances = new Set(validPoints.map((point) => point.balanceSats));
+    if (uniqueBalances.size > 1) {
+      return false;
+    }
+
+    return events.some((event) => {
+      const timestamp = Number(event?.timestamp);
+      const netSats = Number(event?.netSats || 0);
+      return (
+        Number.isFinite(timestamp) &&
+        timestamp >= startTimestamp &&
+        timestamp <= endTimestamp &&
+        netSats !== 0
+      );
+    });
   }
 
   function normalizeCachedSnapshot(snapshot, addressById) {
@@ -4875,6 +5508,63 @@
         };
       })
       .filter(Boolean);
+  }
+
+  function serializeTransactionDetailsMap(source) {
+    const entries = source instanceof Map ? [...source.entries()] : [];
+    return entries
+      .filter(([txid, details]) => isValidTxid(txid) && details && typeof details === "object")
+      .slice(-MAX_TRANSACTIONS_PER_ADDRESS)
+      .map(([txid, details]) => [
+        txid,
+        normalizeTransactionDetails({
+          txid,
+          ...details,
+        }),
+      ])
+      .filter(([, details]) => details);
+  }
+
+  function normalizeTransactionDetailsMap(source) {
+    if (!Array.isArray(source)) {
+      return new Map();
+    }
+
+    const detailsByTxid = new Map();
+    source.forEach((entry) => {
+      if (!Array.isArray(entry) || entry.length < 2 || !isValidTxid(entry[0])) {
+        return;
+      }
+
+      const details = normalizeTransactionDetails({
+        txid: entry[0],
+        ...entry[1],
+      });
+      if (details) {
+        detailsByTxid.set(entry[0], details);
+      }
+    });
+    return detailsByTxid;
+  }
+
+  function normalizeTransactionDetails(candidate) {
+    if (!candidate || typeof candidate !== "object" || !isValidTxid(candidate.txid)) {
+      return null;
+    }
+
+    return {
+      txid: candidate.txid,
+      feeSats: Number.isFinite(candidate.feeSats) ? Number(candidate.feeSats) : null,
+      feeRateSatVb: Number.isFinite(candidate.feeRateSatVb)
+        ? Number(candidate.feeRateSatVb)
+        : null,
+      inputAddresses: Array.isArray(candidate.inputAddresses)
+        ? uniqueStrings(candidate.inputAddresses.filter((entry) => typeof entry === "string" && entry.trim()))
+        : [],
+      outputAddresses: Array.isArray(candidate.outputAddresses)
+        ? uniqueStrings(candidate.outputAddresses.filter((entry) => typeof entry === "string" && entry.trim()))
+        : [],
+    };
   }
 
   function serializeBalanceTimeline(source) {
@@ -5492,6 +6182,23 @@
       return withFallback(attempts, "Incremental address lookup failed.");
     },
 
+    async fetchTransactionDetails(txid) {
+      const normalizedTxid = requireValidTransactionId(txid);
+      const attempts = ADDRESS_API_PROVIDERS.map((provider) => async () => {
+        const transaction = await fetchTransactionFromProvider(provider, normalizedTxid);
+        const details = buildTransactionTechnicalDetails(transaction);
+        if (!details) {
+          throw createApiError("Transaction detail response was incomplete.");
+        }
+        return {
+          provider: provider.name,
+          details,
+        };
+      });
+
+      return withFallback(attempts, "Transaction detail lookup failed.");
+    },
+
     async fetchCurrentPriceUsd() {
       return fetchCurrentPriceQuote();
     },
@@ -5690,6 +6397,15 @@
       truncated: txResult.truncated,
       overlapFound: txResult.overlapFound,
     };
+  }
+
+  async function fetchTransactionFromProvider(provider, txid) {
+    const encoded = encodeURIComponent(txid);
+    return fetchJson(`${provider.baseUrl}/tx/${encoded}`, {
+      providerName: provider.name,
+      validate: validateTransactionPayload,
+      maxBytes: MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES,
+    });
   }
 
   async function fetchAddressTransactions(provider, address, startTimestamp) {
@@ -6104,7 +6820,7 @@
       !payload ||
       typeof payload !== "object" ||
       typeof payload.txid !== "string" ||
-      !/^[0-9a-f]{64}$/i.test(payload.txid) ||
+      !isValidTxid(payload.txid) ||
       !Array.isArray(payload.vin) ||
       !Array.isArray(payload.vout) ||
       !payload.status ||
@@ -6112,6 +6828,17 @@
     ) {
       throw new Error("Invalid transaction response.");
     }
+  }
+
+  function isValidTxid(value) {
+    return typeof value === "string" && /^[0-9a-f]{64}$/i.test(value);
+  }
+
+  function requireValidTransactionId(value) {
+    if (!isValidTxid(value)) {
+      throw createApiError("Invalid transaction id.");
+    }
+    return value;
   }
 
   function validateTickerPayload(payload) {
@@ -6519,6 +7246,7 @@
               outputAddresses: new Set(),
               walletInputAddresses: new Set(),
               walletOutputAddresses: new Set(),
+              hasAddressDetails: false,
             });
           }
 
@@ -6532,6 +7260,9 @@
             row.feeRateSatVb = event.feeRateSatVb;
           }
           row.relatedAddresses.add(label);
+          if (event.inputAddresses.length || event.outputAddresses.length) {
+            row.hasAddressDetails = true;
+          }
           event.inputAddresses.forEach((address) => row.inputAddresses.add(address));
           event.outputAddresses.forEach((address) => row.outputAddresses.add(address));
           event.walletInputAddresses.forEach((address) => row.walletInputAddresses.add(address));
@@ -6556,6 +7287,7 @@
             outputAddresses: [...row.outputAddresses],
             walletInputAddresses: [...row.walletInputAddresses],
             walletOutputAddresses: [...row.walletOutputAddresses],
+            hasAddressDetails: Boolean(row.hasAddressDetails),
           };
         })
         .sort((left, right) => right.timestamp - left.timestamp);
@@ -6639,6 +7371,17 @@
       walletInputAddresses: uniqueStrings(inputAddresses.filter((address) => address === watchedAddress)),
       walletOutputAddresses: uniqueStrings(outputAddresses.filter((address) => address === watchedAddress)),
     };
+  }
+
+  function buildTransactionTechnicalDetails(tx) {
+    const { inputAddresses, outputAddresses } = extractTransactionAddresses(tx);
+    return normalizeTransactionDetails({
+      txid: tx.txid,
+      feeSats: Number.isFinite(tx?.fee) ? Number(tx.fee) : null,
+      feeRateSatVb: extractTransactionFeeRate(tx),
+      inputAddresses,
+      outputAddresses,
+    });
   }
 
   function buildDailyBalanceTimeline(currentBalanceSats, txEvents, startTimestamp, endTimestamp) {
@@ -6772,56 +7515,78 @@
       return null;
     }
 
-    if (
-      !(runtime.intradayPriceHistory instanceof Map) ||
-      !runtime.intradayPriceHistory.size ||
-      !Number.isFinite(runtime.intradayStart) ||
-      !Number.isFinite(runtime.intradayEnd)
-    ) {
-      return null;
-    }
-
-    const intradaySnapshots = snapshots.filter(
-      (snapshot) => Array.isArray(snapshot.hourlyBalanceTimeline) && snapshot.hourlyBalanceTimeline.length
+    const dailySnapshots = snapshots.filter(
+      (snapshot) => Array.isArray(snapshot.balanceTimeline) && snapshot.balanceTimeline.length
     );
 
     let timeline = [];
-    if (intradaySnapshots.length === addressCount) {
-      timeline = combineSnapshotTimelines(
-        intradaySnapshots,
-        "hourlyBalanceTimeline",
-        runtime.intradayPriceHistory,
-        runtime.intradayStart,
-        runtime.intradayEnd,
-        {
-          stepMs: HOUR_MS,
-          alignTime: startOfUtcHour,
-          keyForTimestamp: toHourKey,
-        }
+    if (dailySnapshots.length === addressCount) {
+      const latestSnapshotTimestamp = Math.max(
+        ...dailySnapshots
+          .map((snapshot) => snapshot.balanceTimeline[snapshot.balanceTimeline.length - 1]?.timestamp)
+          .filter(Number.isFinite)
       );
+      const endTimestamp = Number.isFinite(runtime.timelineEnd)
+        ? runtime.timelineEnd
+        : latestSnapshotTimestamp;
+      const oldestSnapshotTimestamp = Math.min(
+        ...dailySnapshots
+          .map((snapshot) => snapshot.balanceTimeline[0]?.timestamp)
+          .filter(Number.isFinite)
+      );
+      const timelineStart = Number.isFinite(runtime.timelineStart)
+        ? runtime.timelineStart
+        : oldestSnapshotTimestamp;
+      const reliableTimelineStart = Number.isFinite(timelineStart)
+        ? getReliableTimelineStartForSnapshots(dailySnapshots, timelineStart, {
+            trimToFirstTransaction: true,
+          })
+        : null;
+      if (Number.isFinite(reliableTimelineStart) && Number.isFinite(endTimestamp)) {
+        timeline = combineSnapshotTimelines(
+          dailySnapshots,
+          "balanceTimeline",
+          runtime.priceHistory,
+          reliableTimelineStart,
+          endTimestamp
+        );
+      }
     }
 
     if (!timeline.length) {
       return null;
     }
 
-    const points = timeline.slice(-24);
+    const points = sampleSeriesPoints(timeline, MAX_WALLET_CARD_CHART_POINTS);
     if (points.length < 2) {
       return null;
     }
     const values = points.map((point) =>
       getDisplayUnit() === "USD"
-        ? getPointDisplayFiatValue(point, {
-            preferIntraday: true,
-          })
+        ? getPointDisplayFiatValue(point)
         : point.btcHoldings
     );
     return createWalletCardMiniChartScene({
-      key: `${walletId}-wallet-card-chart-1d-${getDisplayChartUnitKey()}`,
+      key: `${walletId}-wallet-card-chart-max-${getDisplayChartUnitKey()}`,
       values,
       width: 464,
       height: 152,
     });
+  }
+
+  function sampleSeriesPoints(points, maxPoints) {
+    const source = Array.isArray(points) ? points : [];
+    const limit = Math.max(2, Math.floor(Number(maxPoints) || 0));
+    if (source.length <= limit) {
+      return source;
+    }
+
+    const sampled = [];
+    const step = (source.length - 1) / (limit - 1);
+    for (let index = 0; index < limit; index += 1) {
+      sampled.push(source[Math.round(index * step)]);
+    }
+    return sampled;
   }
 
   function createWalletCardMiniChartScene({ key, values, width = 464, height = 152 }) {
@@ -7321,6 +8086,75 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
         <path d="M5 12h14"></path>
         <path d="m13 5 7 7-7 7"></path>
+      </svg>
+    `;
+  }
+
+  function getFaqIconMarkup(icon) {
+    if (icon === "database") {
+      return `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <ellipse cx="12" cy="5" rx="8" ry="3"></ellipse>
+          <path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5"></path>
+          <path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"></path>
+        </svg>
+      `;
+    }
+
+    if (icon === "cloud-off") {
+      return `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m2 2 20 20"></path>
+          <path d="M6.4 6.4A6.5 6.5 0 0 1 18.4 10h.6a4 4 0 0 1 3.2 6.4"></path>
+          <path d="M18.2 18H7a5 5 0 0 1-1.8-9.66"></path>
+        </svg>
+      `;
+    }
+
+    if (icon === "plug") {
+      return `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22v-5"></path>
+          <path d="M9 8V2"></path>
+          <path d="M15 8V2"></path>
+          <path d="M6 8h12v4a6 6 0 0 1-12 0Z"></path>
+        </svg>
+      `;
+    }
+
+    if (icon === "fast-forward") {
+      return `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m5 5 7 7-7 7V5Z"></path>
+          <path d="m12 5 7 7-7 7V5Z"></path>
+        </svg>
+      `;
+    }
+
+    if (icon === "shield") {
+      return `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"></path>
+          <path d="m9 12 2 2 4-4"></path>
+        </svg>
+      `;
+    }
+
+    if (icon === "lock") {
+      return `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="10" width="16" height="10" rx="2"></rect>
+          <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+          <path d="M12 14v2"></path>
+        </svg>
+      `;
+    }
+
+    return `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 2 19 4"></path>
+        <path d="M7.5 11.5a5 5 0 1 1 5 5L10 19l-2-2-2 2-2-2 3.5-3.5"></path>
+        <circle cx="15" cy="7" r="1"></circle>
       </svg>
     `;
   }
@@ -8010,7 +8844,7 @@
   }
 
   function buildTransactionModalKicker(label, kind = "WALLET") {
-    const prefix = kind === "ADDRESS" ? "TRANSACTION TO ADDRESS" : "TRANSACTION TO WALLET";
+    const prefix = "TRANSACTION TO";
     const formattedLabel =
       kind === "ADDRESS" ? String(label || "") : String(label || "").toUpperCase();
     return `${prefix} ${formattedLabel}`.trim();
