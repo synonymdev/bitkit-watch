@@ -16,8 +16,8 @@ When blockchain or market data is refreshed, your browser connects directly to t
 - Group addresses into wallets.
 - View balances, transaction activity, and historical charts.
 - Cache wallet data locally for fast reloads.
-- Load transaction input/output details on demand when Technical Details is opened, then cache them locally.
-- Use the bundled Satoshi demo wallet without creating an account.
+- Load transaction input/output details.
+- Try the bundled Satoshi demo wallet.
 
 ## Local Development
 
