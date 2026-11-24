@@ -13,10 +13,20 @@ fail() {
   failures=$((failures + 1))
 }
 
-if node --check "$ROOT_DIR/app.js"; then
-  pass "app.js syntax"
+for script in "$ROOT_DIR/app.js" "$ROOT_DIR/assets/api-validation.js" \
+  "$ROOT_DIR/assets/bitcoin-facts.js" "$ROOT_DIR/assets/satoshi-demo-snapshot.js" \
+  "$ROOT_DIR/scripts/build-satoshi-demo-snapshot.mjs"; do
+  if node --check "$script"; then
+    pass "${script#$ROOT_DIR/} syntax"
+  else
+    fail "${script#$ROOT_DIR/} syntax"
+  fi
+done
+
+if node --test "$ROOT_DIR/tests/"*.test.mjs; then
+  pass "security regression tests"
 else
-  fail "app.js syntax"
+  fail "security regression tests"
 fi
 
 if rg -n 'fonts\.googleapis\.com|fonts\.gstatic\.com|mcp\.figma\.com|figma-capture-loader' \
