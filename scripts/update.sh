@@ -8,6 +8,7 @@ trap 'rm -f "$TEMP_FILE"' EXIT
 
 node "$ROOT_DIR/scripts/build-satoshi-demo-snapshot.mjs" "$TEMP_FILE"
 node --check --input-type=commonjs < "$TEMP_FILE"
+chmod 644 "$TEMP_FILE"
 mv "$TEMP_FILE" "$OUTPUT_FILE"
 trap - EXIT
 echo "Updated $OUTPUT_FILE"

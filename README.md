@@ -21,10 +21,20 @@ When blockchain or market data is refreshed, your browser connects directly to t
 
 ## Local Development
 
+The browser app has no third-party JavaScript packages, CDN scripts, or build step. Release tooling uses Node.js 24.22.3, pinned in `.nvmrc`, plus Python 3, zsh, and ripgrep.
+
+With nvm installed, select the project's patched runtime:
+
+```sh
+nvm install
+nvm use
+node --test tests/*.test.mjs
+```
+
 Serve the project from localhost:
 
 ```sh
-python3 -m http.server 8765
+python3 -m http.server 8765 --bind 127.0.0.1
 ```
 
 Then open:
@@ -38,3 +48,5 @@ Bitkit Watch should be served from HTTPS in production or from `http://localhost
 ## Deployment
 
 See [docs/deployment.md](docs/deployment.md) for release checks, Satoshi demo snapshot updates, and production HTTP header recommendations.
+
+See [docs/security-audit-2026-11-24.md](docs/security-audit-2026-11-24.md) for the security review, fixes, and remaining deployment considerations.

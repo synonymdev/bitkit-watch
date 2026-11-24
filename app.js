@@ -1,6 +1,6 @@
 /*
   Bitkit Watch local prototype
-  Open index.html directly in a browser. No build step is required.
+  Serve over HTTPS or localhost. No build step or package installation is required.
 
   API swap points:
   - ADDRESS_API_PROVIDERS below can be replaced with your preferred on-chain providers.
@@ -14,6 +14,19 @@
   // Constants and configuration
   // ---------------------------------------------------------------------------
 
+  const {
+    normalizeBitcoinAddress,
+    isSatoshiAmount,
+    isTimestamp,
+    isValidTxid,
+    validateAddressSummary: validateAddressSummaryPayload,
+    validateTransaction: validateTransactionPayload,
+    validateTransactionList: validateTransactionListPayload,
+    validateCandles: validateCandlesPayload,
+    readJsonResponse,
+  } = globalThis.BITKIT_WATCH_API_VALIDATION;
+
+  const MAX_TIMELINE_POINTS = 25_000;
   const DAY_MS = 24 * 60 * 60 * 1000;
   const HOUR_MS = 60 * 60 * 1000;
   const CACHE_MAX_AGE_MS = HOUR_MS;
@@ -55,6 +68,7 @@
     state: "bitkit-vault-state-v1",
     stateQuarantine: "bitkit-vault-state-quarantine-v1",
     runtimeCache: "bitkit-vault-runtime-cache-v1",
+    dataEpoch: "bitkit-vault-data-epoch-v1",
   };
   const FIGMA_CAPTURE_HASH_KEYS = Object.freeze([
     "figmacapture",
@@ -75,7 +89,7 @@
     "1FvzCLoTPGANNjWoUo6jUGuAG3wg1w4YjR",
   ];
   const SATOSHI_DEMO_ADDRESS_KEYS = new Set(
-    SATOSHI_DEMO_ADDRESSES.map((address) => address.toLowerCase())
+    SATOSHI_DEMO_ADDRESSES.map(normalizeBitcoinAddress)
   );
   const SATOSHI_DEMO_ADDRESS_TAGS = Object.freeze({
     "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa": ["genesis", "unspendable"],
@@ -255,6 +269,10 @@
   // State
   // ---------------------------------------------------------------------------
 
+  let isSyncingStorage = false;
+  let dataGeneration = 0;
+  let dataEpoch = readStoredDataEpoch() || "";
+  const activeRequests = new Set();
   const dom = {};
   let bitcoinFacts = [];
   let chartResizeFrame = 0;
@@ -565,6 +583,7 @@
   // ---------------------------------------------------------------------------
 
   function bindEvents() {
+    window.addEventListener("storage", handleStorageChange);
     window.addEventListener("hashchange", () => {
       applyRouteFromHash({ replaceInvalid: true, renderAfter: true, preloadDetail: true });
     });
@@ -575,7 +594,9 @@
     dom.appBannerDismiss.addEventListener("click", dismissBanner);
 
     dom.refreshButton.addEventListener("click", () => {
+      const generation = dataGeneration;
       refreshCurrentScope({ reason: "manual", allowSkeleton: !runtime.hasLoadedOnce }).catch((error) => {
+        if (!isCurrentGeneration(generation)) return;
         setBanner("error", `Refresh failed. ${error.message || "Try again later."}`);
         render();
       });
@@ -781,6 +802,7 @@
         return;
       }
 
+      const generation = dataGeneration;
       const parsedAddresses = parseAddressInput(dom.walletAddressInput.value);
       if (!parsedAddresses.length) {
         showAddressFeedback("Enter a Bitcoin address.", "error");
@@ -791,6 +813,7 @@
         dom.walletAddressInput.value,
         parsedAddresses
       );
+      if (!isCurrentGeneration(generation)) return;
       if (sensitiveInputCheck.detected) {
         dom.walletAddAddressForm.reset();
         showAddressFeedback(sensitiveInputCheck.message, "error");
@@ -842,6 +865,7 @@
           isValid: await ValidationLayer.isValidMainnetBitcoinAddress(address),
         }))
       );
+      if (!isCurrentGeneration(generation)) return;
       const invalidAddresses = validationResults.filter((result) => !result.isValid).map((result) => result.address);
       if (invalidAddresses.length) {
         showAddressFeedback(
@@ -853,6 +877,12 @@
         return;
       }
 
+      // Recheck after checksum validation: another submission may already have completed.
+      const latestDuplicates = classifyAddressBatchDuplicates(addressesToAdd);
+      if (latestDuplicates.existing.length || state.addresses.length + addressesToAdd.length > MAX_WATCHED_ADDRESSES) {
+        showAddressFeedback("The watchlist changed. Check the addresses and try again.", "error");
+        return;
+      }
       const createdAt = new Date().toISOString();
       const newEntries = addressesToAdd.map((address) => ({
         id: createId("addr"),
@@ -878,6 +908,7 @@
         } else {
           await hydrateAddressesAfterAdd(newEntries);
         }
+        if (!isCurrentGeneration(generation)) return;
         showAddressFeedback(
           newEntries.length === 1
             ? "Address added to the wallet."
@@ -885,6 +916,7 @@
           "success"
         );
       } catch (error) {
+        if (!isCurrentGeneration(generation)) return;
         showAddressFeedback(
           `${newEntries.length === 1 ? "Address" : "Addresses"} saved locally, but loading failed. ${
             error.message || "Try again later."
@@ -1059,7 +1091,40 @@
     }, true);
   }
 
+  function handleStorageChange(event) {
+    if (event.storageArea !== localStorage ||
+        (event.key !== null && event.key !== STORAGE_KEYS.state && event.key !== STORAGE_KEYS.dataEpoch)) {
+      return;
+    }
+    isSyncingStorage = true;
+    try {
+      // Another tab may have removed a wallet or cleared the watchlist. Its old
+      // requests must not restore that data or continue disclosing the addresses.
+      cancelPendingDataWork();
+      const activeWalletId = state.settings.activeWalletId;
+      const activeAddressId = state.settings.activeAddressId;
+      state = StorageLayer.loadState();
+      state.settings.activeWalletId = activeWalletId;
+      state.settings.activeAddressId = activeAddressId;
+      runtime = {
+        ...createRuntimeState(),
+        currentView: runtime.currentView,
+        settingsModalOpen: runtime.settingsModalOpen,
+        chartModalOpen: runtime.chartModalOpen,
+        selectedTransactionTxid: runtime.selectedTransactionTxid,
+        expandedTechnicalTransactionTxid: runtime.expandedTechnicalTransactionTxid,
+      };
+      sanitizeState();
+      hydrateRuntimeFromCache();
+      applyRouteFromHash({ replaceInvalid: true, renderAfter: false, preloadDetail: false, persist: false });
+      render();
+    } finally {
+      isSyncingStorage = false;
+    }
+  }
+
   async function refreshVault({ reason, allowSkeleton }) {
+    const generation = dataGeneration;
     if (!state.addresses.length) {
       overviewCardRefreshInProgress = false;
       runtime = {
@@ -1112,6 +1177,7 @@
         MAX_EXPLORER_CONCURRENCY,
         (entry) => APILayer.fetchAddressBundle(entry.address, startTimestamp)
       );
+      if (!isCurrentGeneration(generation)) return;
       const effectiveStartTimestamp =
         requestedHistoryScope === "ALL"
           ? getHistoryStartTimestampFromAddressResults(addressResults) ||
@@ -1122,6 +1188,7 @@
         endTimestamp,
         getFiatCurrency()
       );
+      if (!isCurrentGeneration(generation)) return;
       const rateLimitWarnings = collectRateLimitWarningsFromSettledResults(addressResults);
 
       const snapshots = [];
@@ -1248,6 +1315,7 @@
         await refreshBundledSatoshiDemoManually(bundledSatoshiDemoGroupId);
       }
     } catch (error) {
+      if (!isCurrentGeneration(generation)) return;
       runtime.isLoading = false;
       runtime.isRefreshing = false;
       overviewCardRefreshInProgress = false;
@@ -1282,6 +1350,7 @@
     entries,
     { reason, allowSkeleton, historyScopeOverride = null, silent = false } = {}
   ) {
+    const generation = dataGeneration;
     const scopedEntries = Array.isArray(entries)
       ? entries.filter(
           (entry, index, source) =>
@@ -1319,15 +1388,18 @@
         MAX_EXPLORER_CONCURRENCY,
         (entry) => APILayer.fetchAddressBundle(entry.address, startTimestamp)
       );
+      if (!isCurrentGeneration(generation)) return;
       const effectiveStartTimestamp =
         requestedHistoryScope === "ALL"
-          ? getHistoryStartTimestampFromAddressResults(addressResults) || startTimestamp
+          ? getHistoryStartTimestampFromAddressResults(addressResults) ||
+            startOfUtcDay(endTimestamp - (ONE_YEAR_DAYS - 1) * DAY_MS)
           : startTimestamp;
       const marketData = await APILayer.fetchMarketData(
         effectiveStartTimestamp,
         endTimestamp,
         getFiatCurrency()
       );
+      if (!isCurrentGeneration(generation)) return;
       const rateLimitWarnings = collectRateLimitWarningsFromSettledResults(addressResults);
 
       const snapshots = [];
@@ -1443,6 +1515,7 @@
       StorageLayer.saveRuntimeCache(runtime);
       render();
     } catch (error) {
+      if (!isCurrentGeneration(generation)) return;
       if (!silent) {
         runtime.isLoading = false;
         runtime.isRefreshing = false;
@@ -2551,6 +2624,7 @@
   }
 
   async function loadTransactionTechnicalDetailsIfNeeded(txid) {
+    const generation = dataGeneration;
     const transaction = getActiveWalletTransaction(txid);
     if (!transaction || hasTransactionTechnicalAddresses(transaction) || runtime.transactionDetailsByTxid.has(txid)) {
       return;
@@ -2560,12 +2634,15 @@
     render();
     try {
       const result = await APILayer.fetchTransactionDetails(txid);
+      if (!isCurrentGeneration(generation)) return;
       runtime.transactionDetailsByTxid.set(txid, result.details);
       runtime.failedTechnicalTransactionTxids.delete(txid);
       StorageLayer.saveRuntimeCache(runtime);
     } catch (error) {
+      if (!isCurrentGeneration(generation)) return;
       runtime.failedTechnicalTransactionTxids.add(txid);
     } finally {
+      if (!isCurrentGeneration(generation)) return;
       if (runtime.loadingTechnicalTransactionTxid === txid) {
         runtime.loadingTechnicalTransactionTxid = null;
       }
@@ -2921,12 +2998,12 @@
       return null;
     }
 
-    const normalized = String(addressValue).trim().toLowerCase();
+    const normalized = normalizeBitcoinAddress(addressValue);
     if (!normalized) {
       return null;
     }
 
-    return state.addresses.find((entry) => entry.address.toLowerCase() === normalized)?.id || null;
+    return state.addresses.find((entry) => normalizeBitcoinAddress(entry.address) === normalized)?.id || null;
   }
 
   function buildTransactionSkeletons(count) {
@@ -3322,6 +3399,7 @@
   }
 
   function preloadOverviewDetailDataIfNeeded({ force = false } = {}) {
+    const generation = dataGeneration;
     if (overviewDetailPreloadPromise || runtime.isLoading || getActiveWallet() || !state.addresses.length) {
       return overviewDetailPreloadPromise;
     }
@@ -3343,6 +3421,7 @@
     })
       .catch(() => null)
       .finally(() => {
+        if (!isCurrentGeneration(generation)) return;
         overviewDetailPreloadPromise = null;
       });
 
@@ -3357,6 +3436,7 @@
   }
 
   function preloadActiveDetailDataIfNeeded() {
+    const generation = dataGeneration;
     if (activeDetailPreloadPromise || runtime.isLoading || runtime.isRefreshing) {
       return activeDetailPreloadPromise;
     }
@@ -3376,12 +3456,14 @@
       historyScopeOverride: request.requiredScope,
     })
       .catch(() => {
+        if (!isCurrentGeneration(generation)) return;
         if (getActiveDetailPreloadRequest()?.key === request.key) {
           setBanner("warning", HISTORY_AUTO_LOAD_FAILURE_WARNING);
           render();
         }
       })
       .finally(() => {
+        if (!isCurrentGeneration(generation)) return;
         activeDetailPreloadPromise = null;
         const nextRequest = getActiveDetailPreloadRequest();
         if (nextRequest && nextRequest.key !== request.key) {
@@ -3415,6 +3497,7 @@
   }
 
   function runBundledSatoshiDemoIncrementalRefresh(groupId, { silent = false } = {}) {
+    const generation = dataGeneration;
     satoshiDemoIncrementalRefreshGroupId = groupId;
     runtime.isRefreshing = true;
     if (!silent) {
@@ -3428,6 +3511,7 @@
       : updatePromise
     )
       .then((result) => {
+        if (!isCurrentGeneration(generation)) return;
         if (!silent && result) {
           const failedCount = result.totalCount - result.successfulCount;
           if (failedCount > 0) {
@@ -3444,6 +3528,7 @@
         return result;
       })
       .finally(() => {
+        if (!isCurrentGeneration(generation)) return;
         runtime.isRefreshing = false;
         satoshiDemoIncrementalRefreshPromise = null;
         satoshiDemoIncrementalRefreshGroupId = null;
@@ -3471,6 +3556,7 @@
   }
 
   async function updateBundledSatoshiDemoCache(groupId) {
+    const generation = dataGeneration;
     const entries = state.addresses.filter((entry) => entry.groupId === groupId);
     const currentSnapshotsById = getSnapshotsById();
     if (
@@ -3492,10 +3578,11 @@
         const snapshot = currentSnapshotsById.get(entry.id);
         return APILayer.fetchAddressDelta(
           entry.address,
-          new Set(snapshot.txEvents.map((event) => event.txid))
+          new Set(snapshot.txEvents.filter((event) => event.confirmed).map((event) => event.txid))
         );
       }
     );
+    if (!isCurrentGeneration(generation)) return;
     const successfulResults = addressResults.filter((result) => result.status === "fulfilled");
     if (!successfulResults.length) {
       throw new Error("Incremental Satoshi demo refresh failed.");
@@ -3506,6 +3593,7 @@
       endTimestamp,
       getFiatCurrency()
     );
+    if (!isCurrentGeneration(generation)) return;
     const mergedPriceHistory = mergeNumberMaps(runtime.priceHistory, marketData.priceHistory);
     const timelineStart = Number.isFinite(runtime.timelineStart)
       ? runtime.timelineStart
@@ -3603,7 +3691,9 @@
 
   function mergeAddressTransactionEvents(cachedEvents, transactions, watchedAddress) {
     const eventsByTxid = new Map(
-      (Array.isArray(cachedEvents) ? cachedEvents : []).map((event) => [event.txid, event])
+      (Array.isArray(cachedEvents) ? cachedEvents : [])
+        .filter((event) => event.confirmed)
+        .map((event) => [event.txid, event])
     );
     (Array.isArray(transactions) ? transactions : []).forEach((transaction) => {
       const event = normalizeTransactionEvent(transaction, watchedAddress);
@@ -3755,7 +3845,7 @@
     return (
       groupEntries.length === SATOSHI_DEMO_ADDRESSES.length &&
       groupEntries.every((candidate) =>
-        SATOSHI_DEMO_ADDRESS_KEYS.has(candidate.address.toLowerCase())
+        SATOSHI_DEMO_ADDRESS_KEYS.has(normalizeBitcoinAddress(candidate.address))
       )
     );
   }
@@ -3826,12 +3916,15 @@
   }
 
   async function hydrateAddressAfterAdd(entry) {
+    const generation = dataGeneration;
     if (!entry) {
       return;
     }
 
     const currentPriceUsd = await ensureCurrentPriceUsd();
+    if (!isCurrentGeneration(generation)) return;
     const summaryResult = await APILayer.fetchAddressSummary(entry.address);
+    if (!isCurrentGeneration(generation)) return;
     const balanceSats = getBalanceSatsFromSummary(summaryResult.summary);
     const summarySnapshot = PortfolioLayer.buildSummarySnapshot({
       entry,
@@ -3850,6 +3943,7 @@
     showAddressFeedback("Address added. Loading recent wallet activity…", "success");
     const quickScope = "30D";
     await hydrateAddressDetail(entry, quickScope, { updateLastUpdated: true });
+    if (!isCurrentGeneration(generation)) return;
     render();
 
     const fullScope = getFullHistoryScopeForBackground();
@@ -3857,15 +3951,18 @@
       showAddressFeedback("Address added. Loading more history in the background…", "success");
       hydrateAddressDetail(entry, fullScope, { updateLastUpdated: true })
         .then(() => {
+          if (!isCurrentGeneration(generation)) return;
           render();
         })
         .catch(() => {
+          if (!isCurrentGeneration(generation)) return;
           render();
         });
     }
   }
 
   async function hydrateAddressesAfterAdd(entries) {
+    const generation = dataGeneration;
     const nextEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
     if (!nextEntries.length) {
       return;
@@ -3881,6 +3978,7 @@
       allowSkeleton: false,
       historyScopeOverride: quickScope,
     });
+    if (!isCurrentGeneration(generation)) return;
     render();
 
     const fullScope = getFullHistoryScopeForBackground();
@@ -3895,24 +3993,39 @@
         historyScopeOverride: fullScope,
       })
         .then(() => {
+          if (!isCurrentGeneration(generation)) return;
           render();
         })
         .catch(() => {
+          if (!isCurrentGeneration(generation)) return;
           render();
         });
     }
   }
 
   async function hydrateAddressDetail(entry, detailScope, { updateLastUpdated = false } = {}) {
+    const generation = dataGeneration;
     const normalizedScope = normalizeHistoryScope(detailScope);
-    const startTimestamp = getStartTimestampForHistoryScope(normalizedScope);
+    let startTimestamp = getStartTimestampForHistoryScope(normalizedScope);
     const endTimestamp = Date.now();
     const hadCoverage = hasScopeCoverage(runtime.historyScope, normalizedScope);
-    const [addressResult, marketData] = await Promise.all([
-      APILayer.fetchAddressBundle(entry.address, startTimestamp),
-      APILayer.fetchMarketData(startTimestamp, endTimestamp, getFiatCurrency()),
-    ]);
+    let addressResult;
+    let marketData;
+    if (normalizedScope === "ALL") {
+      addressResult = await APILayer.fetchAddressBundle(entry.address, startTimestamp);
+      if (!isCurrentGeneration(generation)) return;
+      startTimestamp = getHistoryStartTimestampFromAddressResults([
+        { status: "fulfilled", value: addressResult },
+      ]) || startOfUtcDay(endTimestamp - (ONE_YEAR_DAYS - 1) * DAY_MS);
+      marketData = await APILayer.fetchMarketData(startTimestamp, endTimestamp, getFiatCurrency());
+    } else {
+      [addressResult, marketData] = await Promise.all([
+        APILayer.fetchAddressBundle(entry.address, startTimestamp),
+        APILayer.fetchMarketData(startTimestamp, endTimestamp, getFiatCurrency()),
+      ]);
+    }
 
+    if (!isCurrentGeneration(generation)) return;
     const snapshot = PortfolioLayer.buildAddressSnapshot({
       entry,
       bundle: addressResult.bundle,
@@ -3972,16 +4085,19 @@
   }
 
   async function ensureCurrentPriceUsd() {
+    const generation = dataGeneration;
     if (Number.isFinite(runtime.currentPriceUsd)) {
       return runtime.currentPriceUsd;
     }
 
     const quote = await APILayer.fetchCurrentPriceUsd();
+    requireCurrentGeneration(generation);
     runtime.currentPriceUsd = quote.price;
     return quote.price;
   }
 
   async function refreshCurrentPriceInBackground() {
+    const generation = dataGeneration;
     if (!state.addresses.length) {
       return;
     }
@@ -3994,6 +4110,7 @@
         APILayer.fetchFiatExchangeRates().catch(() => null),
         directFiatProductId ? fetchCurrentProductQuote(directFiatProductId).catch(() => null) : null,
       ]);
+      if (!isCurrentGeneration(generation) || selectedFiatCurrency !== getFiatCurrency()) return;
       if (!Number.isFinite(quote?.price)) {
         return;
       }
@@ -4037,7 +4154,7 @@
 
   function upsertAddressSnapshot(nextSnapshot) {
     const nextId = nextSnapshot?.entry?.id;
-    if (!nextId) {
+    if (!nextId || !state.addresses.some((entry) => entry.id === nextId)) {
       return;
     }
 
@@ -4048,16 +4165,12 @@
     } else {
       const current = nextSnapshots[index];
       nextSnapshots[index] =
-        current && hasScopeCoverage(current.detailScope, nextSnapshot.detailScope)
+        current && getHistoryScopeRank(current.detailScope) > getHistoryScopeRank(nextSnapshot.detailScope)
           ? {
               ...nextSnapshot,
               detailScope: pickHigherHistoryScope(current.detailScope, nextSnapshot.detailScope),
-              txEvents: hasScopeCoverage(current.detailScope, nextSnapshot.detailScope)
-                ? current.txEvents
-                : nextSnapshot.txEvents,
-              balanceTimeline: hasScopeCoverage(current.detailScope, nextSnapshot.detailScope)
-                ? current.balanceTimeline
-                : nextSnapshot.balanceTimeline,
+              txEvents: current.txEvents,
+              balanceTimeline: current.balanceTimeline,
               hourlyBalanceTimeline: nextSnapshot.hourlyBalanceTimeline,
             }
           : nextSnapshot;
@@ -4233,7 +4346,7 @@
     return { view: "watch", walletId: null, addressId: null };
   }
 
-  function applyRouteFromHash({ replaceInvalid = false, renderAfter = true, preloadDetail = true } = {}) {
+  function applyRouteFromHash({ replaceInvalid = false, renderAfter = true, preloadDetail = true, persist = true } = {}) {
     const route = parseViewRouteFromHash();
     const resolved = resolveViewRoute(route);
     const nextView = resolved.view === "faq" ? "faq" : "watch";
@@ -4255,7 +4368,8 @@
     state.settings.activeAddressId = addressId;
     runtime.currentView = nextView;
     resetViewTransientState();
-    StorageLayer.saveState(state);
+    // Storage synchronization must not echo this tab's route back to other tabs.
+    if (persist) StorageLayer.saveState(state);
     clearAddressFeedback();
     if (renderAfter) {
       render();
@@ -4510,6 +4624,7 @@
       return;
     }
 
+    cancelPendingDataWork({ publish: true });
     state.addresses = state.addresses.filter((entry) => entry.id !== addressId);
     if (state.settings.activeAddressId === addressId) {
       state.settings.activeAddressId = null;
@@ -4522,6 +4637,7 @@
     runtime.selectedTransactionTxid = null;
     runtime.expandedTechnicalTransactionTxid = null;
 
+    StorageLayer.saveRuntimeCache(runtime);
     if (!state.addresses.length) {
       state.lastUpdated = null;
       StorageLayer.saveState(state);
@@ -4566,6 +4682,7 @@
       return;
     }
 
+    cancelPendingDataWork({ publish: true });
     const removedAddressIds = new Set(walletAddresses.map((entry) => entry.id));
     state.groups = state.groups.filter((entry) => entry.id !== wallet.id);
     state.addresses = state.addresses.filter((entry) => entry.groupId !== wallet.id);
@@ -4588,6 +4705,7 @@
     StorageLayer.saveState(state);
     clearAddressFeedback();
 
+    StorageLayer.saveRuntimeCache(runtime);
     if (!state.addresses.length) {
       state.lastUpdated = null;
       StorageLayer.saveState(state);
@@ -4606,12 +4724,56 @@
     syncViewRoute("replace");
   }
 
+  function readStoredDataEpoch() {
+    try { return localStorage.getItem(STORAGE_KEYS.dataEpoch) || ""; }
+    catch { return null; }
+  }
+
+  function isCurrentGeneration(generation) {
+    // Storage events are asynchronous. Check the small shared deletion token
+    // before accepting a result, even if the other tab's event has not arrived.
+    const storedEpoch = readStoredDataEpoch();
+    return generation === dataGeneration && (storedEpoch === null || storedEpoch === dataEpoch);
+  }
+
+  function cancelPendingDataWork({ publish = false } = {}) {
+    dataGeneration += 1;
+    let published = true;
+    if (publish) {
+      try {
+        const nextEpoch = createId("epoch");
+        localStorage.setItem(STORAGE_KEYS.dataEpoch, nextEpoch);
+        dataEpoch = nextEpoch;
+      } catch { published = false; }
+    } else {
+      dataEpoch = readStoredDataEpoch() || "";
+    }
+    for (const controller of activeRequests) controller.abort();
+    activeRequests.clear();
+    overviewDetailPreloadPromise = null;
+    activeDetailPreloadPromise = null;
+    satoshiDemoIncrementalRefreshPromise = null;
+    satoshiDemoIncrementalRefreshGroupId = null;
+    overviewCardRefreshInProgress = false;
+    runtime.isLoading = false;
+    runtime.isRefreshing = false;
+    runtime.loadingTechnicalTransactionTxid = null;
+    runtime.transactionDetailsByTxid.clear();
+    runtime.failedTechnicalTransactionTxids.clear();
+    return published;
+  }
+
+  function requireCurrentGeneration(generation) {
+    if (!isCurrentGeneration(generation)) throw new DOMException("Wallet data changed.", "AbortError");
+  }
+
   function clearVault() {
     const confirmed = window.confirm("Clear all local Bitkit Watch data from this browser?");
     if (!confirmed) {
       return;
     }
 
+    const epochSaved = cancelPendingDataWork({ publish: true });
     state = StorageLayer.buildDefaultState();
     runtime = {
       ...createRuntimeState(),
@@ -4620,18 +4782,17 @@
         text: "Local Bitkit Watch data cleared.",
       },
     };
-    try {
-      localStorage.removeItem(STORAGE_KEYS.state);
-    } catch (error) {
-      warnStorageFailure("Local wallet data could not be deleted from this browser.");
+    let cleared = epochSaved;
+    for (const key of Object.values(STORAGE_KEYS)) {
+      if (key === STORAGE_KEYS.dataEpoch) continue;
+      try { localStorage.removeItem(key); }
+      catch { cleared = false; }
     }
-    StorageLayer.clearRuntimeCache();
-    StorageLayer.saveState(state);
+    const saved = StorageLayer.saveState(state);
     hydrateBakedDemoRuntimeIfNeeded();
-    runtime.banner = {
-      tone: "success",
-      text: "Local Bitkit Watch data cleared.",
-    };
+    if (!cleared || !saved) {
+      runtime.banner = { tone: "warning", text: "Some local data could not be cleared. Clear this site's data in your browser settings." };
+    }
     clearAddressFeedback();
     clearAddressTagFeedback();
     resetAddressTagForm();
@@ -4909,16 +5070,19 @@
 
       return normalizeImportedState(JSON.parse(raw));
     } catch (error) {
-      quarantineStoredState(raw);
+      const recovered = quarantineStoredState(raw);
       return {
         ...fallback,
-        _loadWarning:
-          "Stored Bitkit Watch data could not be loaded. A recovery copy was preserved before defaults were restored.",
+        _loadWarning: recovered
+          ? "Stored Bitkit Watch data could not be loaded. A recovery copy was preserved before defaults were restored."
+          : "Stored Bitkit Watch data could not be loaded and a recovery copy could not be saved. Defaults were restored.",
       };
     }
   }
 
   function saveState(nextState) {
+    if (isSyncingStorage) return true;
+    if (!isCurrentGeneration(dataGeneration)) return false;
     try {
       const serialized = JSON.stringify(serializeInternalState(nextState));
       if (getUtf8ByteLength(serialized) > MAX_STATE_STORAGE_BYTES) {
@@ -4944,7 +5108,14 @@
         return null;
       }
 
-      return normalizeRuntimeCache(JSON.parse(raw), currentState);
+      const cached = normalizeRuntimeCache(JSON.parse(raw), currentState);
+      if (currentState.addresses.some((entry) => entry.needsHistoryRefresh)) {
+        // Older versions cached zero transaction amounts for uppercase Bech32.
+        // Persist the pruned cache before the canonicalized watchlist is saved.
+        if (cached) saveRuntimeCache(cached);
+        else clearRuntimeCache();
+      }
+      return cached;
     } catch (error) {
       warnStorageFailure("Cached wallet history could not be loaded. Click Refresh to rebuild it.");
       return null;
@@ -4952,12 +5123,11 @@
   }
 
   function saveRuntimeCache(currentRuntime) {
-    const candidates = buildRuntimeCacheCandidates(currentRuntime);
-    if (!candidates.length) {
-      return;
+    if (isSyncingStorage || !isCurrentGeneration(dataGeneration)) return;
+    if (!currentRuntime.addressSnapshots?.length) {
+      return clearRuntimeCache();
     }
-
-    for (const serialized of candidates) {
+    for (const serialized of buildRuntimeCacheCandidates(currentRuntime)) {
       try {
         const encoded = JSON.stringify(serialized);
         if (getUtf8ByteLength(encoded) > MAX_RUNTIME_CACHE_STORAGE_BYTES) {
@@ -4985,13 +5155,15 @@
 
   function quarantineStoredState(raw) {
     if (!raw) {
-      return;
+      return false;
     }
 
     try {
       localStorage.setItem(STORAGE_KEYS.stateQuarantine, raw);
+      return true;
     } catch (error) {
       // Best effort only. The caller still restores a usable default state.
+      return false;
     }
   }
 
@@ -5108,42 +5280,13 @@
     return next;
   }
 
-  function buildRuntimeCacheCandidates(currentRuntime) {
-    return [
-      serializeRuntimeCache(currentRuntime),
-      serializeRuntimeCache(currentRuntime, {
-        includeIntradayPriceHistory: false,
-        includeHourlyBalanceTimeline: false,
-      }),
-      serializeRuntimeCache(currentRuntime, {
-        includeIntradayPriceHistory: false,
-        includeHourlyBalanceTimeline: false,
-        maxTxEventsPerSnapshot: 500,
-      }),
-      serializeRuntimeCache(currentRuntime, {
-        includeIntradayPriceHistory: false,
-        includeHourlyBalanceTimeline: false,
-        maxTxEventsPerSnapshot: 120,
-      }),
-      serializeRuntimeCache(currentRuntime, {
-        includeAddressDetails: false,
-        includeIntradayPriceHistory: false,
-        includeHourlyBalanceTimeline: false,
-        maxTxEventsPerSnapshot: 120,
-      }),
-      serializeRuntimeCache(currentRuntime, {
-        includeAddressDetails: false,
-        includeIntradayPriceHistory: false,
-        includeHourlyBalanceTimeline: false,
-        maxTxEventsPerSnapshot: 60,
-      }),
-      serializeRuntimeCache(currentRuntime, {
-        includeAddressDetails: false,
-        includeIntradayPriceHistory: false,
-        includeHourlyBalanceTimeline: false,
-        maxTxEventsPerSnapshot: 0,
-      }),
-    ].filter(Boolean);
+  function* buildRuntimeCacheCandidates(currentRuntime) {
+    yield serializeRuntimeCache(currentRuntime);
+    const compact = { includeIntradayPriceHistory: false, includeHourlyBalanceTimeline: false };
+    yield serializeRuntimeCache(currentRuntime, compact);
+    for (const maxTxEventsPerSnapshot of [500, 120, 60, 0]) {
+      yield serializeRuntimeCache(currentRuntime, { ...compact, maxTxEventsPerSnapshot });
+    }
   }
 
   function serializeRuntimeCache(
@@ -5184,8 +5327,8 @@
         provider: snapshot.provider || "",
         balanceSats: Number(snapshot.balanceSats || 0),
         usdValue: Number.isFinite(snapshot.usdValue) ? snapshot.usdValue : null,
-        approximate: Boolean(snapshot.approximate),
-        detailScope: normalizeSnapshotDetailScope(snapshot.detailScope),
+        approximate: Boolean(snapshot.approximate) || snapshot.txEvents.length > maxTxEventsPerSnapshot,
+        detailScope: maxTxEventsPerSnapshot === 0 ? "SUMMARY" : normalizeSnapshotDetailScope(snapshot.detailScope),
         txEvents: serializeTxEvents(snapshot.txEvents, {
           includeAddressDetails,
           maxItems: maxTxEventsPerSnapshot,
@@ -5206,6 +5349,7 @@
     const addressById = new Map(currentState.addresses.map((entry) => [entry.id, entry]));
     const snapshots = Array.isArray(candidate.addressSnapshots)
       ? candidate.addressSnapshots
+          .slice(0, MAX_WATCHED_ADDRESSES)
           .map((snapshot) => normalizeCachedSnapshot(snapshot, addressById))
           .filter(Boolean)
       : [];
@@ -5214,10 +5358,10 @@
       return null;
     }
 
-    const timelineStart = Number.isFinite(candidate.timelineStart) ? candidate.timelineStart : null;
-    const timelineEnd = Number.isFinite(candidate.timelineEnd) ? candidate.timelineEnd : null;
-    const intradayStart = Number.isFinite(candidate.intradayStart) ? candidate.intradayStart : null;
-    const intradayEnd = Number.isFinite(candidate.intradayEnd) ? candidate.intradayEnd : null;
+    const timelineStart = isTimestamp(candidate.timelineStart) ? candidate.timelineStart : null;
+    const timelineEnd = isTimestamp(candidate.timelineEnd) ? candidate.timelineEnd : null;
+    const intradayStart = isTimestamp(candidate.intradayStart) ? candidate.intradayStart : null;
+    const intradayEnd = isTimestamp(candidate.intradayEnd) ? candidate.intradayEnd : null;
     let rebuiltTimelines = false;
     snapshots.forEach((snapshot) => {
       rebuiltTimelines =
@@ -5332,7 +5476,7 @@
     }
 
     const entry = addressById.get(snapshot.entryId);
-    if (!entry) {
+    if (!entry || entry.needsHistoryRefresh || !isSatoshiAmount(snapshot.balanceSats)) {
       return null;
     }
 
@@ -5365,7 +5509,7 @@
       return map;
     }
 
-    source.forEach((entry) => {
+    source.slice(0, MAX_TIMELINE_POINTS).forEach((entry) => {
       if (Array.isArray(entry) && typeof entry[0] === "string" && Number.isFinite(entry[1])) {
         map.set(entry[0], entry[1]);
       }
@@ -5438,7 +5582,9 @@
       return [];
     }
 
-    const serialized = source.slice(0, MAX_TRANSACTIONS_PER_ADDRESS).map((event) => ({
+    const limit = Number.isFinite(maxItems) && maxItems >= 0
+      ? Math.min(maxItems, MAX_TRANSACTIONS_PER_ADDRESS) : MAX_TRANSACTIONS_PER_ADDRESS;
+    return source.slice(0, limit).map((event) => ({
       txid: event.txid,
       timestamp: Number(event.timestamp || 0),
       confirmed: Boolean(event.confirmed),
@@ -5461,11 +5607,6 @@
           : [],
     }));
 
-    if (!Number.isFinite(maxItems) || maxItems < 0) {
-      return serialized;
-    }
-
-    return maxItems === 0 ? [] : serialized.slice(0, maxItems);
   }
 
   function normalizeCachedTxEvents(source) {
@@ -5476,7 +5617,9 @@
     return source
       .slice(0, MAX_TRANSACTIONS_PER_ADDRESS)
       .map((event) => {
-        if (!event || typeof event.txid !== "string") {
+        if (!event || !isValidTxid(event.txid) || !isTimestamp(event.timestamp) ||
+          !isSatoshiAmount(event.receivedSats) || !isSatoshiAmount(event.sentSats) ||
+          event.netSats !== event.receivedSats - event.sentSats) {
           return null;
         }
 
@@ -5531,14 +5674,14 @@
     }
 
     const detailsByTxid = new Map();
-    source.forEach((entry) => {
+    source.slice(-MAX_TRANSACTIONS_PER_ADDRESS).forEach((entry) => {
       if (!Array.isArray(entry) || entry.length < 2 || !isValidTxid(entry[0])) {
         return;
       }
 
       const details = normalizeTransactionDetails({
-        txid: entry[0],
         ...entry[1],
+        txid: entry[0],
       });
       if (details) {
         detailsByTxid.set(entry[0], details);
@@ -5585,8 +5728,10 @@
     }
 
     return source
+      .slice(0, MAX_TIMELINE_POINTS)
       .map((point) => {
-        if (!point || typeof point.dateKey !== "string") {
+        if (!point || typeof point.dateKey !== "string" || !isTimestamp(point.timestamp) ||
+            !isSatoshiAmount(point.balanceSats)) {
           return null;
         }
 
@@ -5635,12 +5780,12 @@
     const normalized = [];
 
     source.forEach((entry) => {
-      const address = typeof entry?.address === "string" ? entry.address.trim() : "";
+      const address = normalizeBitcoinAddress(entry?.address);
       if (!address) {
         return;
       }
 
-      const key = address.toLowerCase();
+      const key = normalizeBitcoinAddress(address);
       if (seen.has(key)) {
         return;
       }
@@ -5656,6 +5801,7 @@
       normalized.push({
         id: typeof entry.id === "string" ? entry.id : createId("addr"),
         address,
+        needsHistoryRefresh: address !== entry.address.trim(),
         tags: normalizeAddressTags(entry.tags),
         groupId,
         createdAt:
@@ -5704,19 +5850,19 @@
 
     return rawValue
       .split(/[\s,;]+/)
-      .map((entry) => entry.trim())
+      .map(normalizeBitcoinAddress)
       .filter(Boolean);
   }
 
   function classifyAddressBatchDuplicates(addresses) {
-    const existingAddresses = new Set(state.addresses.map((entry) => entry.address.toLowerCase()));
+    const existingAddresses = new Set(state.addresses.map((entry) => normalizeBitcoinAddress(entry.address)));
     const seen = new Set();
     const unique = [];
     const duplicates = [];
     const existing = [];
 
     addresses.forEach((address) => {
-      const key = address.toLowerCase();
+      const key = normalizeBitcoinAddress(address);
       if (existingAddresses.has(key)) {
         existing.push(address);
         return;
@@ -5756,7 +5902,7 @@
     }
 
     const hasAnyDemoAddress = nextState.addresses.some((entry) =>
-      SATOSHI_DEMO_ADDRESSES.some((address) => address.toLowerCase() === entry.address.toLowerCase())
+      SATOSHI_DEMO_ADDRESSES.some((address) => normalizeBitcoinAddress(address) === normalizeBitcoinAddress(entry.address))
     );
     if (hasAnyDemoAddress && !force) {
       nextState.seededDemoWallets = uniqueStrings([...seededKeys, SATOSHI_DEMO_KEY]);
@@ -5788,10 +5934,10 @@
       nextState.groups.splice(insertIndex, 0, satoshiWallet);
     }
 
-    const existingAddresses = new Set(nextState.addresses.map((entry) => entry.address.toLowerCase()));
+    const existingAddresses = new Set(nextState.addresses.map((entry) => normalizeBitcoinAddress(entry.address)));
     const createdAt = new Date().toISOString();
     SATOSHI_DEMO_ADDRESSES.forEach((address) => {
-      if (existingAddresses.has(address.toLowerCase())) {
+      if (existingAddresses.has(normalizeBitcoinAddress(address))) {
         return;
       }
 
@@ -5826,7 +5972,7 @@
 
   const ValidationLayer = {
     async isValidMainnetBitcoinAddress(address) {
-      const normalized = address.trim();
+      const normalized = typeof address === "string" ? address.trim() : "";
       if (!normalized) {
         return false;
       }
@@ -6144,7 +6290,9 @@
 
   const APILayer = {
     async fetchAddressSummary(address) {
+      const generation = dataGeneration;
       const normalizedAddress = await requireValidMainnetBitcoinAddress(address);
+      requireCurrentGeneration(generation);
       const attempts = ADDRESS_API_PROVIDERS.map((provider) => async () => {
         const summary = await fetchAddressSummaryFromProvider(provider, normalizedAddress);
         return {
@@ -6157,7 +6305,9 @@
     },
 
     async fetchAddressBundle(address, startTimestamp) {
+      const generation = dataGeneration;
       const normalizedAddress = await requireValidMainnetBitcoinAddress(address);
+      requireCurrentGeneration(generation);
       const attempts = ADDRESS_API_PROVIDERS.map((provider) => async () => {
         const bundle = await fetchAddressBundleFromProvider(provider, normalizedAddress, startTimestamp);
         return {
@@ -6170,7 +6320,9 @@
     },
 
     async fetchAddressDelta(address, knownTxids) {
+      const generation = dataGeneration;
       const normalizedAddress = await requireValidMainnetBitcoinAddress(address);
+      requireCurrentGeneration(generation);
       const attempts = ADDRESS_API_PROVIDERS.map((provider) => async () => {
         const bundle = await fetchAddressDeltaFromProvider(provider, normalizedAddress, knownTxids);
         return {
@@ -6208,6 +6360,7 @@
     },
 
     async fetchMarketData(startTimestamp, endTimestamp, displayFiatCurrency = "USD") {
+      const generation = dataGeneration;
       let currentPrice = null;
       let currentPriceError = null;
       let fiatExchangeRates = createDefaultFiatExchangeRates();
@@ -6217,6 +6370,7 @@
         fetchFiatExchangeRates(),
         fetchDirectFiatMarketData(displayFiatCurrency, startTimestamp, endTimestamp),
       ]);
+      requireCurrentGeneration(generation);
       if (currentPriceResult.status === "fulfilled") {
         currentPrice = currentPriceResult.value;
       } else {
@@ -6240,6 +6394,7 @@
         historyAvailable = false;
       }
 
+      requireCurrentGeneration(generation);
       if ((!currentPrice || !Number.isFinite(currentPrice.price)) && priceHistory.size) {
         currentPrice = {
           provider: "Historical close fallback",
@@ -6266,6 +6421,7 @@
         intradayPriceHistory = new Map();
       }
 
+      requireCurrentGeneration(generation);
       return {
         currentPriceUsd: currentPrice.price,
         fiatExchangeRates,
@@ -6362,18 +6518,20 @@
     const encoded = encodeURIComponent(address);
     return fetchJson(`${provider.baseUrl}/address/${encoded}`, {
       providerName: provider.name,
-      validate: validateAddressSummaryPayload,
+      validate: (payload) => validateAddressSummaryPayload(payload, address),
     });
   }
 
   // Privacy: fetches full transaction history for an address. Same IP-correlation
   // risk as fetchAddressSummaryFromProvider above.
   async function fetchAddressBundleFromProvider(provider, address, startTimestamp) {
+    const generation = dataGeneration;
     const encoded = encodeURIComponent(address);
     const summary = await fetchJson(`${provider.baseUrl}/address/${encoded}`, {
       providerName: provider.name,
-      validate: validateAddressSummaryPayload,
+      validate: (payload) => validateAddressSummaryPayload(payload, address),
     });
+    requireCurrentGeneration(generation);
     const txResult = await fetchAddressTransactions(provider, address, startTimestamp);
 
     return {
@@ -6384,11 +6542,13 @@
   }
 
   async function fetchAddressDeltaFromProvider(provider, address, knownTxids) {
+    const generation = dataGeneration;
     const encoded = encodeURIComponent(address);
     const summary = await fetchJson(`${provider.baseUrl}/address/${encoded}`, {
       providerName: provider.name,
-      validate: validateAddressSummaryPayload,
+      validate: (payload) => validateAddressSummaryPayload(payload, address),
     });
+    requireCurrentGeneration(generation);
     const txResult = await fetchAddressTransactionsUntilKnown(provider, address, knownTxids);
 
     return {
@@ -6403,12 +6563,13 @@
     const encoded = encodeURIComponent(txid);
     return fetchJson(`${provider.baseUrl}/tx/${encoded}`, {
       providerName: provider.name,
-      validate: validateTransactionPayload,
+      validate: (payload) => validateTransactionPayload(payload, txid),
       maxBytes: MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES,
     });
   }
 
   async function fetchAddressTransactions(provider, address, startTimestamp) {
+    const generation = dataGeneration;
     const encoded = encodeURIComponent(address);
     const firstPage = await fetchJson(`${provider.baseUrl}/address/${encoded}/txs`, {
       providerName: provider.name,
@@ -6442,6 +6603,7 @@
       pageCount < MAX_TRANSACTION_PAGES &&
       collected.length < MAX_TRANSACTIONS_PER_ADDRESS
     ) {
+      requireCurrentGeneration(generation);
       const nextPage = await fetchJson(`${provider.baseUrl}/address/${encoded}/txs/chain/${lastSeen}`, {
         providerName: provider.name,
         validate: validateTransactionListPayload,
@@ -6473,6 +6635,7 @@
   }
 
   async function fetchAddressTransactionsUntilKnown(provider, address, knownTxids) {
+    const generation = dataGeneration;
     const encoded = encodeURIComponent(address);
     const known = knownTxids instanceof Set ? knownTxids : new Set();
     const collected = [];
@@ -6508,6 +6671,7 @@
       pageCount < MAX_TRANSACTION_PAGES &&
       collected.length < MAX_TRANSACTIONS_PER_ADDRESS
     ) {
+      requireCurrentGeneration(generation);
       const nextPage = await fetchJson(`${provider.baseUrl}/address/${encoded}/txs/chain/${lastSeen}`, {
         providerName: provider.name,
         validate: validateTransactionListPayload,
@@ -6539,9 +6703,10 @@
   }
 
   async function fetchProductHistoricalPriceSeries(productId, startTimestamp, endTimestamp) {
+    const generation = dataGeneration;
     const requests = buildCandleRequests(startTimestamp, endTimestamp, 295);
-    const candleResponses = await Promise.allSettled(
-      requests.map((request) =>
+    const candleResponses = await allSettledWithConcurrency(
+      requests, MAX_EXPLORER_CONCURRENCY, (request) =>
         fetchJson(
           `https://api.exchange.coinbase.com/products/${encodeURIComponent(productId)}/candles?granularity=86400&start=${encodeURIComponent(
             new Date(request.start).toISOString()
@@ -6551,9 +6716,9 @@
             validate: validateCandlesPayload,
           }
         )
-      )
     );
 
+    requireCurrentGeneration(generation);
     const closeByDay = new Map();
     candleResponses.forEach((response) => {
       if (response.status !== "fulfilled") {
@@ -6589,6 +6754,7 @@
 
     if (pendingSpotDates.length && pendingSpotDates.length <= 45) {
       for (const dateKey of pendingSpotDates) {
+        requireCurrentGeneration(generation);
         try {
           const response = await fetchJson(
             `https://api.coinbase.com/v2/prices/${encodeURIComponent(productId)}/spot?date=${encodeURIComponent(dateKey)}`,
@@ -6666,6 +6832,7 @@
       intradayEnd = Date.now(),
     } = {}
   ) {
+    const generation = dataGeneration;
     const normalizedFiat = normalizeFiatCurrency(fiatCurrency);
     const productId = getDirectFiatProductId(normalizedFiat);
     if (!productId) {
@@ -6680,6 +6847,7 @@
       currentPriceError = error;
     }
 
+    requireCurrentGeneration(generation);
     let priceHistory = new Map();
     try {
       const historyResult = await fetchProductHistoricalPriceSeries(productId, startTimestamp, endTimestamp);
@@ -6688,6 +6856,7 @@
       priceHistory = new Map();
     }
 
+    requireCurrentGeneration(generation);
     if ((!currentPrice || !Number.isFinite(currentPrice.price)) && priceHistory.size) {
       currentPrice = {
         provider: "Historical close fallback",
@@ -6711,6 +6880,7 @@
       intradayPriceHistory = new Map();
     }
 
+    requireCurrentGeneration(generation);
     return {
       currency: normalizedFiat,
       productId,
@@ -6753,6 +6923,7 @@
   }
 
   async function allSettledWithConcurrency(items, maxConcurrent, worker) {
+    const generation = dataGeneration;
     const source = Array.isArray(items) ? items : [];
     const results = new Array(source.length);
     let nextIndex = 0;
@@ -6760,6 +6931,7 @@
 
     async function runWorker() {
       while (nextIndex < source.length) {
+        requireCurrentGeneration(generation);
         const index = nextIndex;
         nextIndex += 1;
         try {
@@ -6777,61 +6949,16 @@
     }
 
     await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+    requireCurrentGeneration(generation);
     return results;
   }
 
   async function requireValidMainnetBitcoinAddress(address) {
-    const normalized = typeof address === "string" ? address.trim() : "";
+    const normalized = normalizeBitcoinAddress(address);
     if (!(await ValidationLayer.isValidMainnetBitcoinAddress(normalized))) {
       throw createApiError("Skipped invalid stored Bitcoin address.");
     }
     return normalized;
-  }
-
-  function validateAddressSummaryPayload(payload) {
-    if (!payload || typeof payload !== "object") {
-      throw new Error("Invalid address summary response.");
-    }
-
-    ["chain_stats", "mempool_stats"].forEach((statsKey) => {
-      const stats = payload[statsKey];
-      if (!stats || typeof stats !== "object") {
-        throw new Error("Invalid address summary response.");
-      }
-
-      ["funded_txo_sum", "spent_txo_sum"].forEach((valueKey) => {
-        if (!Number.isFinite(Number(stats[valueKey]))) {
-          throw new Error("Invalid address summary response.");
-        }
-      });
-    });
-  }
-
-  function validateTransactionListPayload(payload) {
-    if (!Array.isArray(payload)) {
-      throw new Error("Invalid transaction list response.");
-    }
-
-    payload.forEach(validateTransactionPayload);
-  }
-
-  function validateTransactionPayload(payload) {
-    if (
-      !payload ||
-      typeof payload !== "object" ||
-      typeof payload.txid !== "string" ||
-      !isValidTxid(payload.txid) ||
-      !Array.isArray(payload.vin) ||
-      !Array.isArray(payload.vout) ||
-      !payload.status ||
-      typeof payload.status !== "object"
-    ) {
-      throw new Error("Invalid transaction response.");
-    }
-  }
-
-  function isValidTxid(value) {
-    return typeof value === "string" && /^[0-9a-f]{64}$/i.test(value);
   }
 
   function requireValidTransactionId(value) {
@@ -6854,64 +6981,15 @@
   }
 
   function validateRatesPayload(payload) {
-    if (!payload?.data?.rates || !Number.isFinite(Number(payload.data.rates.USD))) {
+    if (!payload?.data?.rates || !Number.isFinite(Number(payload.data.rates.USD)) || Number(payload.data.rates.USD) <= 0) {
       throw new Error("Invalid exchange-rate response.");
     }
   }
 
-  function validateCandlesPayload(payload) {
-    if (!Array.isArray(payload)) {
-      throw new Error("Invalid candle response.");
-    }
-
-    payload.forEach((candle) => {
-      if (!Array.isArray(candle) || !Number.isFinite(Number(candle[0])) || !Number.isFinite(Number(candle[4]))) {
-        throw new Error("Invalid candle response.");
-      }
-    });
-  }
-
-  async function readJsonResponse(response, maxBytes = MAX_API_RESPONSE_BYTES) {
-    const contentType = response.headers.get("content-type") || "";
-    if (!/^application\/(?:[^;]+\+)?json(?:;|$)/i.test(contentType)) {
-      throw new Error("API returned a non-JSON response.");
-    }
-
-    const declaredLength = Number(response.headers.get("content-length"));
-    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-      throw new Error("API response exceeded the supported size.");
-    }
-
-    if (!response.body?.getReader) {
-      const text = await response.text();
-      if (getUtf8ByteLength(text) > maxBytes) {
-        throw new Error("API response exceeded the supported size.");
-      }
-      return JSON.parse(text);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let receivedBytes = 0;
-    let text = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      receivedBytes += value.byteLength;
-      if (receivedBytes > maxBytes) {
-        await reader.cancel();
-        throw new Error("API response exceeded the supported size.");
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-    text += decoder.decode();
-    return JSON.parse(text);
-  }
-
   async function fetchJson(url, { providerName = "", validate = null, maxBytes = MAX_API_RESPONSE_BYTES } = {}) {
+    const generation = dataGeneration;
     const controller = new AbortController();
+    activeRequests.add(controller);
     const timeout = window.setTimeout(() => controller.abort(), 15000);
 
     try {
@@ -6921,11 +6999,15 @@
         },
         mode: "cors",
         credentials: "omit",
+        redirect: "error",
+        cache: "no-store",
         referrerPolicy: "no-referrer",
         signal: controller.signal,
       });
 
+      requireCurrentGeneration(generation);
       if (!response.ok) {
+        await response.body?.cancel();
         throw createApiError(`${response.status} ${response.statusText}`.trim(), {
           status: response.status,
           providerName,
@@ -6933,6 +7015,7 @@
         });
       }
       const payload = await readJsonResponse(response, maxBytes);
+      requireCurrentGeneration(generation);
       if (typeof validate === "function") {
         validate(payload);
       }
@@ -6941,14 +7024,18 @@
       throw annotateApiError(error, { providerName, url });
     } finally {
       window.clearTimeout(timeout);
+      activeRequests.delete(controller);
     }
   }
 
   async function withFallback(attempts, finalMessage) {
+    const generation = dataGeneration;
     const errors = [];
     for (const attempt of attempts) {
+      requireCurrentGeneration(generation);
       try {
         const result = await attempt();
+        requireCurrentGeneration(generation);
         if (!errors.length) {
           return result;
         }
@@ -6962,6 +7049,7 @@
 
         return result;
       } catch (error) {
+        requireCurrentGeneration(generation);
         errors.push(annotateApiError(error));
       }
     }
@@ -7343,13 +7431,13 @@
     const feeRateSatVb = extractTransactionFeeRate(tx);
 
     (tx.vout || []).forEach((output) => {
-      if (output.scriptpubkey_address === watchedAddress) {
+      if (normalizeBitcoinAddress(output.scriptpubkey_address) === normalizeBitcoinAddress(watchedAddress)) {
         receivedSats += Number(output.value || 0);
       }
     });
 
     (tx.vin || []).forEach((input) => {
-      if (input.prevout?.scriptpubkey_address === watchedAddress) {
+      if (normalizeBitcoinAddress(input.prevout?.scriptpubkey_address) === normalizeBitcoinAddress(watchedAddress)) {
         sentSats += Number(input.prevout.value || 0);
       }
     });
@@ -7396,6 +7484,13 @@
     );
   }
 
+  function isSupportedTimelineRange(startTimestamp, endTimestamp, stepMs) {
+    return Number.isFinite(startTimestamp) && Number.isFinite(endTimestamp) &&
+      startTimestamp >= 0 && endTimestamp >= startTimestamp && endTimestamp <= Date.now() + DAY_MS &&
+      Number.isFinite(stepMs) && stepMs > 0 &&
+      Math.floor((endTimestamp - startTimestamp) / stepMs) + 1 <= MAX_TIMELINE_POINTS;
+  }
+
   function buildIntervalBalanceTimeline(
     currentBalanceSats,
     txEvents,
@@ -7405,6 +7500,7 @@
     alignTime,
     keyForTimestamp
   ) {
+    if (!isSupportedTimelineRange(startTimestamp, endTimestamp, stepMs)) return [];
     const sortedDescending = [...txEvents].sort((a, b) => b.timestamp - a.timestamp);
     const points = [];
     let balance = currentBalanceSats;
@@ -7439,6 +7535,7 @@
       keyForTimestamp = toDateKey,
     } = {}
   ) {
+    if (!isSupportedTimelineRange(startTimestamp, endTimestamp, stepMs)) return [];
     const sources = (Array.isArray(snapshots) ? snapshots : [])
       .map((snapshot) => {
         const points = Array.isArray(snapshot?.[timelineKey])
@@ -9018,10 +9115,10 @@
       historyAvailable: candidate.historyAvailable !== false,
       historyMissingDays: Number.isFinite(candidate.historyMissingDays) ? candidate.historyMissingDays : 0,
       approximationMode: Boolean(candidate.approximationMode),
-      timelineStart: Number.isFinite(candidate.timelineStart) ? candidate.timelineStart : null,
-      timelineEnd: Number.isFinite(candidate.timelineEnd) ? candidate.timelineEnd : null,
-      intradayStart: Number.isFinite(candidate.intradayStart) ? candidate.intradayStart : null,
-      intradayEnd: Number.isFinite(candidate.intradayEnd) ? candidate.intradayEnd : null,
+      timelineStart: isTimestamp(candidate.timelineStart) ? candidate.timelineStart : null,
+      timelineEnd: isTimestamp(candidate.timelineEnd) ? candidate.timelineEnd : null,
+      intradayStart: isTimestamp(candidate.intradayStart) ? candidate.intradayStart : null,
+      intradayEnd: isTimestamp(candidate.intradayEnd) ? candidate.intradayEnd : null,
       snapshotsByAddress,
     };
   }
@@ -9275,7 +9372,7 @@
     }
 
     return state.addresses.every((entry) =>
-      SATOSHI_DEMO_ADDRESS_KEYS.has(entry.address.toLowerCase())
+      SATOSHI_DEMO_ADDRESS_KEYS.has(normalizeBitcoinAddress(entry.address))
     );
   }
 

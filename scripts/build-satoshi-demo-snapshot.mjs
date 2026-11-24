@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { writeFile } from "node:fs/promises";
+import validation from "../assets/api-validation.js";
+const { validateAddressSummary, validateTransactionList, validateCandles, readJsonResponse } = validation;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -100,7 +102,7 @@ async function fetchAddressBundle(address) {
   for (const provider of EXPLORERS) {
     try {
       const encoded = encodeURIComponent(address);
-      const summary = await fetchJson(`${provider.baseUrl}/address/${encoded}`, validateAddressSummary);
+      const summary = await fetchJson(`${provider.baseUrl}/address/${encoded}`, (payload) => validateAddressSummary(payload, address));
       const { transactions, truncated } = await fetchAddressTransactions(provider, address);
       return {
         address,
@@ -232,16 +234,7 @@ async function fetchCoinbaseCandles(startTimestamp, endTimestamp, granularity) {
     `https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=${granularity}&start=${encodeURIComponent(
       new Date(startTimestamp).toISOString()
     )}&end=${encodeURIComponent(new Date(endTimestamp).toISOString())}`,
-    (payload) => {
-      if (!Array.isArray(payload)) {
-        throw new Error("Invalid Coinbase candle response.");
-      }
-      payload.forEach((candle) => {
-        if (!Array.isArray(candle) || candle.length < 5 || !Number.isFinite(Number(candle[4]))) {
-          throw new Error("Invalid Coinbase candle response.");
-        }
-      });
-    }
+    validateCandles
   );
 }
 
@@ -251,78 +244,22 @@ async function fetchJson(url, validate) {
   try {
     const response = await fetch(url, {
       headers: { Accept: "application/json" },
+      redirect: "error",
+      credentials: "omit",
+      cache: "no-store",
       signal: controller.signal,
     });
     if (!response.ok) {
+      await response.body?.cancel();
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const contentType = response.headers.get("content-type") || "";
-    if (!contentType.toLowerCase().includes("json")) {
-      throw new Error(`Expected JSON but received ${contentType || "an unknown content type"}.`);
-    }
-
-    const body = await readBoundedText(response, MAX_RESPONSE_BYTES);
-    const payload = JSON.parse(body);
+    const payload = await readJsonResponse(response, MAX_RESPONSE_BYTES);
     validate(payload);
     return payload;
   } finally {
     clearTimeout(timeout);
   }
-}
-
-async function readBoundedText(response, maxBytes) {
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const chunks = [];
-  let totalBytes = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-    totalBytes += value.byteLength;
-    if (totalBytes > maxBytes) {
-      await reader.cancel();
-      throw new Error(`Response exceeds ${maxBytes} bytes.`);
-    }
-    chunks.push(value);
-  }
-
-  const joined = new Uint8Array(totalBytes);
-  let offset = 0;
-  chunks.forEach((chunk) => {
-    joined.set(chunk, offset);
-    offset += chunk.byteLength;
-  });
-  return new TextDecoder().decode(joined);
-}
-
-function validateAddressSummary(payload) {
-  ["chain_stats", "mempool_stats"].forEach((key) => {
-    const stats = payload?.[key];
-    if (
-      !stats ||
-      !Number.isFinite(Number(stats.funded_txo_sum)) ||
-      !Number.isFinite(Number(stats.spent_txo_sum))
-    ) {
-      throw new Error("Invalid explorer address summary.");
-    }
-  });
-}
-
-function validateTransactionList(payload) {
-  if (!Array.isArray(payload)) {
-    throw new Error("Invalid explorer transaction list.");
-  }
-  payload.forEach((transaction) => {
-    if (!transaction || typeof transaction.txid !== "string") {
-      throw new Error("Invalid explorer transaction.");
-    }
-  });
 }
 
 function getBalanceSats(summary) {
