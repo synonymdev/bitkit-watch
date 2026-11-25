@@ -21,20 +21,23 @@ When blockchain or market data is refreshed, your browser connects directly to t
 
 ## Local Development
 
-The browser app has no third-party JavaScript packages, CDN scripts, or build step. Release tooling uses Node.js 24.22.3, pinned in `.nvmrc`, plus Python 3, zsh, and ripgrep.
+The browser app has no third-party JavaScript packages, CDN scripts, or build step. Release tooling uses Node.js 24.22.3, pinned in `.nvmrc`, plus Python 3, Bash, and OpenSSL. Playwright is a pinned development dependency for browser tests; it is not shipped to users.
 
 With nvm installed, select the project's patched runtime:
 
 ```sh
 nvm install
 nvm use
-node --test tests/*.test.mjs
+npm ci --ignore-scripts
+npx playwright install chromium webkit
+npm test
+npm run test:browser
 ```
 
 Serve the project from localhost:
 
 ```sh
-python3 -m http.server 8765 --bind 127.0.0.1
+npm start
 ```
 
 Then open:
@@ -43,7 +46,28 @@ Then open:
 http://localhost:8765
 ```
 
+For Safari-compatible local previews, use `npm start -- --https` and open `https://127.0.0.1:8765`. The local server generates a temporary self-signed certificate; it does not install a trusted certificate. Browser tests use this HTTPS mode to preserve the production security policy.
+
 Bitkit Watch should be served from HTTPS in production or from `http://localhost` during local development. Address validation relies on the browser Web Crypto API and fails closed when checksum verification is unavailable.
+
+## Code Layout
+
+- `app.js`: UI, wallet actions, and refresh coordination.
+- `assets/storage.js`: bounded persistence, cache recovery, and normalization.
+- `assets/api.js`: validated provider requests, fallback, cancellation, and rate-limit cooldowns.
+- `assets/portfolio.js`: balances, transaction activity, and timeline calculations.
+- `assets/charts.js`: chart geometry, gaps, labels, and pointer interaction.
+- `assets/market-history.js`: shared real-price coverage for the app and snapshot builder.
+
+Modules receive explicit dependencies from `app.js`; browser scripts are served directly without bundling.
+
+## Prepare a Release
+
+```sh
+npm run prepare:release -- 0.1.5
+```
+
+This refreshes the public Satoshi snapshot, updates the manifest, lockfile, visible version and asset URLs, then runs release and desktop/mobile Chromium and WebKit checks. Failed checks, Ctrl+C, and SIGTERM restore the previous release files after stopping child commands. Review the diff and personally sign and push your commit afterward.
 
 ## Deployment
 

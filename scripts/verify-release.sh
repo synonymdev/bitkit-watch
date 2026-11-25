@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,9 +13,7 @@ fail() {
   failures=$((failures + 1))
 }
 
-for script in "$ROOT_DIR/app.js" "$ROOT_DIR/assets/api-validation.js" \
-  "$ROOT_DIR/assets/bitcoin-facts.js" "$ROOT_DIR/assets/satoshi-demo-snapshot.js" \
-  "$ROOT_DIR/scripts/build-satoshi-demo-snapshot.mjs"; do
+for script in "$ROOT_DIR/app.js" "$ROOT_DIR/assets/"*.js "$ROOT_DIR/scripts/"*.mjs; do
   if node --check "$script"; then
     pass "${script#$ROOT_DIR/} syntax"
   else
@@ -29,21 +27,21 @@ else
   fail "security regression tests"
 fi
 
-if rg -n 'fonts\.googleapis\.com|fonts\.gstatic\.com|mcp\.figma\.com|figma-capture-loader' \
+if grep -En 'fonts\.googleapis\.com|fonts\.gstatic\.com|mcp\.figma\.com|figma-capture-loader' \
   "$ROOT_DIR/index.html" "$ROOT_DIR/terms-of-use.html" "$ROOT_DIR/privacy-policy.html"; then
   fail "production HTML contains a prohibited external asset origin or development capture loader"
 else
   pass "production HTML excludes Google Fonts and Figma capture references"
 fi
 
-if rg -n '\[[^]]*\]|aria-label="Blank draft cell"|<td>\[</td>' \
+if grep -En '\[[^]]*\]|aria-label="Blank draft cell"|<td>\[</td>' \
   "$ROOT_DIR/terms-of-use.html" "$ROOT_DIR/privacy-policy.html"; then
   fail "legal pages still contain draft markers that require counsel review"
 else
   pass "legal pages contain no draft markers"
 fi
 
-if python3 - "$ROOT_DIR/assets/satoshi-demo-snapshot.js" <<'PY'
+if python3 - "$ROOT_DIR/assets/satoshi-demo-snapshot.js" "${1:-}" <<'PY'
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -57,9 +55,11 @@ if prefix not in text or not text.rstrip().endswith(");"):
 payload = json.loads(text.split(prefix, 1)[1].rsplit(");", 1)[0])
 as_of = datetime.fromisoformat(payload["asOf"].replace("Z", "+00:00"))
 age_days = (datetime.now(timezone.utc) - as_of).total_seconds() / 86400
-if age_days < 0 or age_days > 14:
+if age_days < 0 or (age_days > 14 and "--allow-stale-snapshot" not in sys.argv):
     raise SystemExit(f"snapshot is {age_days:.1f} days old")
 runtime_cache = payload.get("runtimeCache")
+if not isinstance(runtime_cache, dict) or runtime_cache.get("priceHistoryVersion") != 1:
+    raise SystemExit("snapshot has unverified legacy price history")
 if not isinstance(runtime_cache, dict) or runtime_cache.get("historyScope") != "ALL":
     raise SystemExit("snapshot must include bounded all-time runtime cache")
 balances = payload.get("balancesByAddress")
@@ -72,7 +72,7 @@ if not all(isinstance(snapshot.get("txEvents"), list) and snapshot["txEvents"] f
     raise SystemExit("snapshot per-address transaction cache missing")
 PY
 then
-  pass "bundled Satoshi snapshot is fresh and includes per-address all-time detail"
+  pass "bundled Satoshi snapshot meets the selected age policy and includes per-address detail"
 else
   fail "bundled Satoshi snapshot is stale, invalid, or missing per-address detail"
 fi
@@ -92,6 +92,12 @@ then
   pass "manifest paths are relative"
 else
   fail "manifest paths are not relative"
+fi
+
+if node "$ROOT_DIR/scripts/check-release.mjs"; then
+  pass "release versions and local assets agree"
+else
+  fail "release versions or local assets disagree"
 fi
 
 if (( failures > 0 )); then

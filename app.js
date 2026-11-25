@@ -26,6 +26,8 @@
     readJsonResponse,
   } = globalThis.BITKIT_WATCH_API_VALIDATION;
 
+  const { summarizePriceHistory } = globalThis.BITKIT_WATCH_MARKET_HISTORY;
+
   const MAX_TIMELINE_POINTS = 25_000;
   const DAY_MS = 24 * 60 * 60 * 1000;
   const HOUR_MS = 60 * 60 * 1000;
@@ -120,6 +122,152 @@
     GBP: { prefix: "£", icon: "£", fractionDigits: 2 },
     CNY: { prefix: "CN¥", icon: "¥", fractionDigits: 2 },
   });
+  const {
+    buildDefaultState,
+    loadState,
+    saveState,
+    loadRuntimeCache,
+    saveRuntimeCache,
+    clearRuntimeCache,
+    normalizeImportedState,
+    buildRuntimeCacheCandidates,
+    serializeRuntimeCache,
+    normalizeRuntimeCache,
+    deserializeNumberMap,
+    normalizeFiatExchangeRates,
+    mergeFiatExchangeRates,
+    mergeNumberMaps,
+    areNumberMapsEqual,
+    normalizeCachedTxEvents,
+    normalizeTransactionDetails,
+    normalizeCachedBalanceTimeline
+  } = globalThis.BITKIT_WATCH_STORAGE.create({
+    DEFAULT_WALLET_NAMES,
+    HOUR_MS,
+    MAX_RUNTIME_CACHE_STORAGE_BYTES,
+    MAX_STATE_STORAGE_BYTES,
+    MAX_TIMELINE_POINTS,
+    MAX_TRANSACTIONS_PER_ADDRESS,
+    MAX_WALLETS,
+    MAX_WATCHED_ADDRESSES,
+    STORAGE_KEYS,
+    SUPPORTED_FIAT_CURRENCIES,
+    buildDailyBalanceTimeline: (...args) => buildDailyBalanceTimeline(...args),
+    buildIntervalBalanceTimeline: (...args) => buildIntervalBalanceTimeline(...args),
+    createDefaultFiatExchangeRates,
+    createDefaultSettings,
+    createId,
+    getDataGeneration: () => dataGeneration,
+    isCurrentGeneration,
+    isSatoshiAmount,
+    isStorageSyncing: () => isSyncingStorage,
+    isTimestamp,
+    isValidTxid,
+    normalizeAddressTags,
+    normalizeBitcoinAddress,
+    normalizeBitcoinNotation,
+    normalizeChartRange,
+    normalizeDemoSeedKeys,
+    normalizeFiatCurrency,
+    normalizeHistoryScope,
+    normalizeSnapshotDetailScope,
+    normalizeWalletName,
+    seedSatoshiDemoWallet,
+    startOfUtcHour,
+    toHourKey,
+    uniqueStrings,
+    warnStorageFailure
+  });
+
+  const {
+    APILayer,
+    fetchCurrentProductQuote,
+    fetchProductHistoricalPriceSeries,
+    getHistoryStartTimestampFromAddressResults,
+    allSettledWithConcurrency,
+    getRetryAt,
+    fetchJson,
+    withFallback,
+    toApiWarning
+  } = globalThis.BITKIT_WATCH_API.create({
+    ADDRESS_API_PROVIDERS,
+    DAY_MS,
+    HOUR_MS,
+    MAX_API_RESPONSE_BYTES,
+    MAX_EXPLORER_CONCURRENCY,
+    MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES,
+    MAX_TRANSACTIONS_PER_ADDRESS,
+    MAX_TRANSACTION_PAGES,
+    SUPPORTED_FIAT_CURRENCIES,
+    getValidationLayer: () => ValidationLayer,
+    buildTransactionTechnicalDetails: (...args) => buildTransactionTechnicalDetails(...args),
+    createDefaultFiatExchangeRates,
+    getActiveRequests: () => activeRequests,
+    getDataGeneration: () => dataGeneration,
+    getDirectFiatProductId,
+    getLastFinitePriceFromHistory,
+    getProductQuoteCurrency,
+    isValidTxid,
+    normalizeBitcoinAddress,
+    normalizeFiatCurrency,
+    readJsonResponse,
+    requireCurrentGeneration,
+    startOfUtcDay,
+    startOfUtcHour,
+    summarizePriceHistory,
+    toDateKey,
+    toHourKey,
+    validateAddressSummaryPayload,
+    validateCandlesPayload,
+    validateTransactionListPayload,
+    validateTransactionPayload
+  });
+
+  const {
+    PortfolioLayer,
+    ActivityLayer,
+    normalizeTransactionEvent,
+    buildTransactionTechnicalDetails,
+    buildDailyBalanceTimeline,
+    buildIntervalBalanceTimeline,
+    combineSnapshotTimelines,
+    buildFlatTimeline
+  } = globalThis.BITKIT_WATCH_PORTFOLIO.create({
+    DAY_MS,
+    HISTORY_DAYS,
+    HOUR_MS,
+    MAX_TIMELINE_POINTS,
+    looksLikeBitcoinAddress,
+    normalizeBitcoinAddress,
+    normalizeTransactionDetails: (...args) => normalizeTransactionDetails(...args),
+    shortAddress,
+    startOfUtcDay,
+    startOfUtcHour,
+    toDateKey,
+    toHourKey,
+    uniqueStrings
+  });
+
+  const {
+    sampleSeriesPoints,
+    createWalletCardMiniChartScene,
+    createSparklineScene,
+    bindSparklineInteraction,
+    getSeriesGrowthDescriptor
+  } = globalThis.BITKIT_WATCH_CHARTS.create({
+    escapeHtml,
+    formatCompactDecimal,
+    formatDisplayFiatValue,
+    formatWalletBtc,
+    getChartLineDownIconMarkup,
+    getChartLineFlatIconMarkup,
+    getChartLineUpIconMarkup,
+    getDisplayUnit,
+    getState: () => state,
+    normalizeChartRange,
+    normalizeDisplayedGrowthPercent
+  });
+
   const SATOSHI_BAKED_SNAPSHOT = normalizeBakedDemoSnapshot(globalThis.BITKIT_VAULT_SATOSHI_SNAPSHOT);
   const FAQ_ITEMS = Object.freeze([
     {
@@ -201,6 +349,8 @@
     detail: [
       "walletDetail",
       "walletSecondarySummary",
+    "walletChartDataStatus",
+    "chartModalDataStatus",
       "walletPrimarySummary",
       "walletTransactions",
       "walletTransactionsControls",
@@ -391,12 +541,21 @@
       return;
     }
 
+    if (cachedRuntime.needsPriceHistoryRefresh) {
+      cachedRuntime.priceHistory = new Map(SATOSHI_BAKED_SNAPSHOT?.runtimeCache?.priceHistory || []);
+      cachedRuntime.intradayPriceHistory = new Map(SATOSHI_BAKED_SNAPSHOT?.runtimeCache?.intradayPriceHistory || []);
+      cachedRuntime.historyAvailable = cachedRuntime.priceHistory.size > 0;
+      if (Number.isFinite(cachedRuntime.timelineStart) && Number.isFinite(cachedRuntime.timelineEnd)) {
+        cachedRuntime.historyMissingDays = summarizePriceHistory(cachedRuntime.priceHistory, cachedRuntime.timelineStart, cachedRuntime.timelineEnd).missingDays;
+      }
+    }
+
     runtime = {
       ...runtime,
       ...cachedRuntime,
       hasLoadedOnce: cachedRuntime.addressSnapshots.length > 0,
     };
-    if (cachedRuntime.rebuiltTimelines) {
+    if (cachedRuntime.rebuiltTimelines || cachedRuntime.needsPriceHistoryRefresh) {
       StorageLayer.saveRuntimeCache(runtime);
     }
   }
@@ -452,6 +611,8 @@
       return {
         entry,
         provider: bakedSnapshot.provider,
+        refreshedAt: Date.parse(SATOSHI_BAKED_SNAPSHOT.asOf) || null,
+        refreshFailed: false,
         balanceSats: bakedSnapshot.balanceSats,
         usdValue: (bakedSnapshot.balanceSats / 1e8) * currentPriceUsd,
         txEvents,
@@ -918,8 +1079,8 @@
       } catch (error) {
         if (!isCurrentGeneration(generation)) return;
         showAddressFeedback(
-          `${newEntries.length === 1 ? "Address" : "Addresses"} saved locally, but loading failed. ${
-            error.message || "Try again later."
+          `${newEntries.length === 1 ? "Address" : "Addresses"} saved locally. ${
+            error.message || "Data could not be loaded. Click Refresh to try again."
           }`,
           "error"
         );
@@ -1178,12 +1339,13 @@
         (entry) => APILayer.fetchAddressBundle(entry.address, startTimestamp)
       );
       if (!isCurrentGeneration(generation)) return;
+      markRefreshFailures(refreshEntries, addressResults);
       const effectiveStartTimestamp =
         requestedHistoryScope === "ALL"
           ? getHistoryStartTimestampFromAddressResults(addressResults) ||
             startOfUtcDay(Date.now() - (ONE_YEAR_DAYS - 1) * DAY_MS)
           : startTimestamp;
-      const marketData = await APILayer.fetchMarketData(
+      const marketData = await fetchMarketDataWithCache(
         effectiveStartTimestamp,
         endTimestamp,
         getFiatCurrency()
@@ -1221,8 +1383,9 @@
         }
       });
 
+      markRefreshFailures(refreshEntries, addressResults);
       if (!snapshots.length) {
-        throw new Error("All address lookups failed.");
+        throw new Error("All address lookups failed. Showing saved data.");
       }
 
       if (partialFailures.length) {
@@ -1234,6 +1397,7 @@
       }
 
       const bannerParts = [];
+      if (marketData.priceStale) bannerParts.push("Price refresh failed; using saved prices.");
       if (rateLimitWarnings.length) {
         bannerParts.push(formatRateLimitWarning(rateLimitWarnings));
       }
@@ -1241,21 +1405,21 @@
         bannerParts.push(
           `${partialFailures.length} ${
             partialFailures.length === 1 ? "address" : "addresses"
-          } could not be refreshed. Showing partial data.`
+          } could not be refreshed. Keeping saved data; totals may be incomplete.`
         );
       }
       if (!marketData.historyAvailable) {
-        bannerParts.push("Historical BTC/USD data is unavailable, so wallet growth is approximate.");
+        bannerParts.push("Historical BTC/USD prices are unavailable. Missing values are left blank.");
       } else if (marketData.historyMissingDays > 0) {
-        bannerParts.push("Historical BTC/USD data has gaps, so some wallet growth points are approximate.");
+        bannerParts.push("Historical BTC/USD prices have gaps. Missing values are left blank.");
       }
 
-      const retainedSnapshots = bundledSatoshiDemoGroupId
-        ? runtime.addressSnapshots.filter(
-            (snapshot) => snapshot?.entry?.groupId === bundledSatoshiDemoGroupId
-          )
-        : [];
-      const nextAddressSnapshots = [...retainedSnapshots, ...snapshots];
+      markRefreshFailures(refreshEntries, addressResults);
+      replaceAddressSnapshots(snapshots);
+      const nextAddressSnapshots = runtime.addressSnapshots.map((snapshot) => ({
+        ...snapshot, usdValue: snapshot.balanceSats / 1e8 * marketData.currentPriceUsd,
+      }));
+
 
       runtime = {
         ...runtime,
@@ -1263,6 +1427,7 @@
         isRefreshing: false,
         hasLoadedOnce: true,
         currentPriceUsd: marketData.currentPriceUsd,
+        priceStale: Boolean(marketData.priceStale),
         fiatExchangeRates: mergeFiatExchangeRates(marketData.fiatExchangeRates, runtime.fiatExchangeRates),
         currentPriceFiat: Number.isFinite(marketData.displayFiatMarket?.currentPrice)
           ? marketData.displayFiatMarket.currentPrice
@@ -1316,6 +1481,7 @@
       }
     } catch (error) {
       if (!isCurrentGeneration(generation)) return;
+      markEntriesRefreshFailed(refreshEntries);
       runtime.isLoading = false;
       runtime.isRefreshing = false;
       overviewCardRefreshInProgress = false;
@@ -1389,12 +1555,13 @@
         (entry) => APILayer.fetchAddressBundle(entry.address, startTimestamp)
       );
       if (!isCurrentGeneration(generation)) return;
+      markRefreshFailures(scopedEntries, addressResults);
       const effectiveStartTimestamp =
         requestedHistoryScope === "ALL"
           ? getHistoryStartTimestampFromAddressResults(addressResults) ||
             startOfUtcDay(endTimestamp - (ONE_YEAR_DAYS - 1) * DAY_MS)
           : startTimestamp;
-      const marketData = await APILayer.fetchMarketData(
+      const marketData = await fetchMarketDataWithCache(
         effectiveStartTimestamp,
         endTimestamp,
         getFiatCurrency()
@@ -1428,11 +1595,13 @@
         }
       });
 
+      markRefreshFailures(scopedEntries, addressResults);
       if (!snapshots.length) {
-        throw new Error("All address lookups failed.");
+        throw new Error("All address lookups failed. Showing saved data.");
       }
 
       replaceAddressSnapshots(snapshots);
+      runtime.addressSnapshots.forEach((snapshot) => { snapshot.usdValue = snapshot.balanceSats / 1e8 * marketData.currentPriceUsd; });
 
       const refreshedAddressSet = new Set(scopedEntries.map((entry) => entry.address));
       const retainedFailures = runtime.partialFailures.filter(
@@ -1441,6 +1610,7 @@
       const mergedPartialFailures = [...retainedFailures, ...partialFailures];
 
       const bannerParts = [];
+      if (marketData.priceStale) bannerParts.push("Price refresh failed; using saved prices.");
       if (rateLimitWarnings.length) {
         bannerParts.push(formatRateLimitWarning(rateLimitWarnings));
       }
@@ -1448,13 +1618,13 @@
         bannerParts.push(
           `${partialFailures.length} ${
             partialFailures.length === 1 ? "address" : "addresses"
-          } could not be refreshed. Showing partial data.`
+          } could not be refreshed. Keeping saved data; totals may be incomplete.`
         );
       }
       if (!marketData.historyAvailable) {
-        bannerParts.push("Historical BTC/USD data is unavailable, so wallet growth is approximate.");
+        bannerParts.push("Historical BTC/USD prices are unavailable. Missing values are left blank.");
       } else if (marketData.historyMissingDays > 0) {
-        bannerParts.push("Historical BTC/USD data has gaps, so some wallet growth points are approximate.");
+        bannerParts.push("Historical BTC/USD prices have gaps. Missing values are left blank.");
       }
 
       runtime = {
@@ -1463,6 +1633,7 @@
         isRefreshing: silent ? runtime.isRefreshing : false,
         hasLoadedOnce: true,
         currentPriceUsd: marketData.currentPriceUsd,
+        priceStale: Boolean(marketData.priceStale),
         fiatExchangeRates: mergeFiatExchangeRates(marketData.fiatExchangeRates, runtime.fiatExchangeRates),
         currentPriceFiat: Number.isFinite(marketData.displayFiatMarket?.currentPrice)
           ? marketData.displayFiatMarket.currentPrice
@@ -1516,6 +1687,7 @@
       render();
     } catch (error) {
       if (!isCurrentGeneration(generation)) return;
+      markEntriesRefreshFailed(scopedEntries);
       if (!silent) {
         runtime.isLoading = false;
         runtime.isRefreshing = false;
@@ -1852,6 +2024,7 @@
       }
       dom.walletChartKicker.textContent = chartKicker;
       dom.walletChartTitleSymbol.textContent = chartDisplay.symbol;
+      dom.walletChartDataStatus.textContent = "";
       renderChartTitleText(dom.walletChartTitleText, null);
       renderChartGrowthStat(dom.walletChartGrowth, null);
       delete dom.walletChartStage.dataset.tone;
@@ -1891,6 +2064,7 @@
     }
     dom.walletChartKicker.textContent = chartKicker;
     dom.walletChartTitleSymbol.textContent = chartDisplay.symbol;
+    dom.walletChartDataStatus.textContent = loadingDetail ? "" : getChartDataStatus(chartDisplay);
     renderChartTitleText(dom.walletChartTitleText, chartDisplay);
     if (loadingDetail) {
       renderChartGrowthStat(dom.walletChartGrowth, null);
@@ -1900,6 +2074,7 @@
         dom.chartModal.hidden = false;
         dom.chartModalKicker.textContent = detailView.address ? "ADDRESS GROWTH" : "WALLET GROWTH";
         dom.chartModalTitleSymbol.textContent = chartDisplay.symbol;
+        dom.chartModalDataStatus.textContent = "";
         dom.chartModalTabs.hidden = true;
         renderChartTitleText(dom.chartModalTitleText, null);
         renderChartGrowthStat(dom.chartModalGrowth, null);
@@ -1941,6 +2116,7 @@
       dom.chartModal.hidden = true;
       dom.chartModalTabs.hidden = true;
       dom.chartModalStage.innerHTML = "";
+      dom.chartModalDataStatus.textContent = "";
       renderChartTitleText(dom.chartModalTitleText, null);
       renderChartGrowthStat(dom.chartModalGrowth, null);
       return;
@@ -1950,6 +2126,7 @@
     dom.chartModalTabs.hidden = false;
     dom.chartModalKicker.textContent = detailView.address ? "ADDRESS GROWTH" : "WALLET GROWTH";
     dom.chartModalTitleSymbol.textContent = chartDisplay.symbol;
+    dom.chartModalDataStatus.textContent = detailView.hasDetailData ? getChartDataStatus(chartDisplay) : "";
     renderChartTitleText(dom.chartModalTitleText, chartDisplay);
     renderChartGrowthStat(dom.chartModalGrowth, chartDisplay);
     renderSparkline(dom.chartModalStage, chartDisplay, {
@@ -1963,7 +2140,7 @@
       return;
     }
 
-    const descriptor = getSeriesGrowthDescriptor(chartDisplay?.values);
+    const descriptor = chartDisplay?.incompleteHistory ? null : getSeriesGrowthDescriptor(chartDisplay?.values);
     if (!descriptor) {
       element.hidden = true;
       element.className = "wallet-chart-growth";
@@ -1981,7 +2158,7 @@
       return;
     }
 
-    const descriptor = getSeriesGrowthDescriptor(chartDisplay?.values);
+    const descriptor = chartDisplay?.incompleteHistory ? null : getSeriesGrowthDescriptor(chartDisplay?.values);
     element.textContent = shouldUseCompactChartTitle(descriptor) ? "OVER TIME" : "VALUE OVER TIME";
   }
 
@@ -3340,6 +3517,56 @@
       : COLLAPSED_TRANSACTION_COUNT;
   }
 
+  async function fetchMarketDataWithCache(startTimestamp, endTimestamp, currency) {
+    const generation = dataGeneration;
+    let result;
+    try {
+      result = await APILayer.fetchMarketData(startTimestamp, endTimestamp, currency);
+    } catch (error) {
+      requireCurrentGeneration(generation);
+      if (!Number.isFinite(runtime.currentPriceUsd)) throw error;
+      return {
+        ...runtime,
+        priceStale: true,
+        displayFiatMarket: runtime.currentPriceFiatCurrency === currency ? {
+          currency, currentPrice: runtime.currentPriceFiat,
+          priceHistory: runtime.fiatPriceHistory, intradayPriceHistory: runtime.fiatIntradayPriceHistory,
+        } : null,
+      };
+    }
+    requireCurrentGeneration(generation);
+    result.priceHistory = mergeNumberMaps(runtime.priceHistory, result.priceHistory);
+    result.intradayPriceHistory = mergeNumberMaps(runtime.intradayPriceHistory, result.intradayPriceHistory);
+    result.historyMissingDays = summarizePriceHistory(result.priceHistory, startTimestamp, endTimestamp).missingDays;
+    result.historyAvailable = result.priceHistory.size > 0;
+    if (result.displayFiatMarket?.currency === runtime.currentPriceFiatCurrency) {
+      result.displayFiatMarket.priceHistory = mergeNumberMaps(runtime.fiatPriceHistory, result.displayFiatMarket.priceHistory);
+    }
+    return result;
+  }
+
+  function markRefreshFailures(entries, results) {
+    const failed = entries.filter((_, index) => results[index]?.status !== "fulfilled");
+    if (failed.length) markEntriesRefreshFailed(failed);
+  }
+
+  function markEntriesRefreshFailed(entries) {
+    const ids = new Set(entries.map((entry) => entry.id));
+    runtime.addressSnapshots.forEach((snapshot) => {
+      if (ids.has(snapshot.entry.id)) snapshot.refreshFailed = true;
+    });
+    StorageLayer.saveRuntimeCache(runtime);
+  }
+
+  function getChartDataStatus(chartDisplay) {
+    const parts = [];
+    if (getDisplayUnit() === "USD") {
+      if (!chartDisplay?.values.length || chartDisplay.values.some((value) => !Number.isFinite(value))) parts.push("Price history incomplete; gaps are left blank.");
+      if (chartDisplay?.estimatedFiat) parts.push("Estimated using today's exchange rate.");
+    }
+    return parts.join(" ");
+  }
+
   function getSnapshotsById() {
     return new Map(runtime.addressSnapshots.map((snapshot) => [snapshot.entry.id, snapshot]));
   }
@@ -3519,7 +3746,7 @@
               "warning",
               `${failedCount} ${
                 failedCount === 1 ? "address" : "addresses"
-              } could not be refreshed. Showing partial data.`
+              } could not be refreshed. Keeping saved data; totals may be incomplete.`
             );
           } else {
             setHeaderStatus("Watch refreshed");
@@ -3583,12 +3810,13 @@
       }
     );
     if (!isCurrentGeneration(generation)) return;
+    markRefreshFailures(entries, addressResults);
     const successfulResults = addressResults.filter((result) => result.status === "fulfilled");
     if (!successfulResults.length) {
       throw new Error("Incremental Satoshi demo refresh failed.");
     }
 
-    const marketData = await APILayer.fetchMarketData(
+    const marketData = await fetchMarketDataWithCache(
       marketStartTimestamp,
       endTimestamp,
       getFiatCurrency()
@@ -3617,6 +3845,8 @@
       nextSnapshots.push({
         ...currentSnapshot,
         provider: result.value.provider,
+        refreshedAt: endTimestamp,
+        refreshFailed: false,
         balanceSats,
         usdValue: (balanceSats / 1e8) * marketData.currentPriceUsd,
         txEvents,
@@ -3641,10 +3871,12 @@
     });
 
     replaceAddressSnapshots(nextSnapshots);
+    runtime.addressSnapshots.forEach((snapshot) => { snapshot.usdValue = snapshot.balanceSats / 1e8 * marketData.currentPriceUsd; });
     runtime = {
       ...runtime,
       hasLoadedOnce: true,
       currentPriceUsd: marketData.currentPriceUsd,
+      priceStale: Boolean(marketData.priceStale),
       fiatExchangeRates: mergeFiatExchangeRates(
         marketData.fiatExchangeRates,
         runtime.fiatExchangeRates
@@ -3774,9 +4006,7 @@
   }
 
   function hasUnsuppressedTruncatedSnapshots(snapshots) {
-    return snapshots.some(
-      (snapshot) => snapshot?.approximate && !isBundledSatoshiDemoEntry(snapshot.entry)
-    );
+    return snapshots.some((snapshot) => snapshot.approximate);
   }
 
   function getReliableTimelineStartForSnapshots(
@@ -4017,11 +4247,11 @@
       startTimestamp = getHistoryStartTimestampFromAddressResults([
         { status: "fulfilled", value: addressResult },
       ]) || startOfUtcDay(endTimestamp - (ONE_YEAR_DAYS - 1) * DAY_MS);
-      marketData = await APILayer.fetchMarketData(startTimestamp, endTimestamp, getFiatCurrency());
+      marketData = await fetchMarketDataWithCache(startTimestamp, endTimestamp, getFiatCurrency());
     } else {
       [addressResult, marketData] = await Promise.all([
         APILayer.fetchAddressBundle(entry.address, startTimestamp),
-        APILayer.fetchMarketData(startTimestamp, endTimestamp, getFiatCurrency()),
+        fetchMarketDataWithCache(startTimestamp, endTimestamp, getFiatCurrency()),
       ]);
     }
 
@@ -4039,6 +4269,7 @@
 
     upsertAddressSnapshot(snapshot);
     runtime.currentPriceUsd = marketData.currentPriceUsd;
+    runtime.priceStale = Boolean(marketData.priceStale);
     runtime.fiatExchangeRates = mergeFiatExchangeRates(marketData.fiatExchangeRates, runtime.fiatExchangeRates);
     runtime.currentPriceFiat = Number.isFinite(marketData.displayFiatMarket?.currentPrice)
       ? marketData.displayFiatMarket.currentPrice
@@ -4125,11 +4356,12 @@
       const directPriceUnchanged =
         runtime.currentPriceFiat === directPrice &&
         runtime.currentPriceFiatCurrency === (Number.isFinite(directPrice) ? selectedFiatCurrency : null);
-      if (priceUnchanged && ratesUnchanged && directPriceUnchanged) {
+      if (priceUnchanged && ratesUnchanged && directPriceUnchanged && !runtime.priceStale) {
         return;
       }
 
       runtime.currentPriceUsd = quote.price;
+      runtime.priceStale = false;
       runtime.fiatExchangeRates = normalizedRates;
       runtime.currentPriceFiat = directPrice;
       runtime.currentPriceFiatCurrency = Number.isFinite(directPrice) ? selectedFiatCurrency : null;
@@ -4148,7 +4380,11 @@
 
       render();
     } catch (error) {
-      // Keep the cached price if the lightweight live quote refresh fails.
+      // Keep the cached price and expose its status without advancing address freshness.
+      if (!isCurrentGeneration(generation)) return;
+      runtime.priceStale = true;
+      StorageLayer.saveRuntimeCache(runtime);
+      render();
     }
   }
 
@@ -5037,136 +5273,6 @@
     return `WALLET#${nextNumber}`;
   }
 
-  function buildDefaultState() {
-    const next = {
-      groups: DEFAULT_WALLET_NAMES.map((name) => ({
-        id: createId("grp"),
-        name,
-      })),
-      addresses: [],
-      seededDemoWallets: [],
-      hideBalances: false,
-      selectedRange: "30D",
-      settings: createDefaultSettings(),
-      lastUpdated: null,
-      satoshiDemoLastRefreshedAt: null,
-    };
-    seedSatoshiDemoWallet(next, { force: true });
-    return next;
-  }
-
-  function loadState() {
-    const fallback = buildDefaultState();
-    let raw = "";
-    try {
-      raw = localStorage.getItem(STORAGE_KEYS.state) || "";
-      if (!raw) {
-        return fallback;
-      }
-
-      if (getUtf8ByteLength(raw) > MAX_STATE_STORAGE_BYTES) {
-        throw new Error("Stored state exceeds the supported size.");
-      }
-
-      return normalizeImportedState(JSON.parse(raw));
-    } catch (error) {
-      const recovered = quarantineStoredState(raw);
-      return {
-        ...fallback,
-        _loadWarning: recovered
-          ? "Stored Bitkit Watch data could not be loaded. A recovery copy was preserved before defaults were restored."
-          : "Stored Bitkit Watch data could not be loaded and a recovery copy could not be saved. Defaults were restored.",
-      };
-    }
-  }
-
-  function saveState(nextState) {
-    if (isSyncingStorage) return true;
-    if (!isCurrentGeneration(dataGeneration)) return false;
-    try {
-      const serialized = JSON.stringify(serializeInternalState(nextState));
-      if (getUtf8ByteLength(serialized) > MAX_STATE_STORAGE_BYTES) {
-        throw new Error("Local watchlist data exceeds the supported size.");
-      }
-      localStorage.setItem(STORAGE_KEYS.state, serialized);
-      return true;
-    } catch (error) {
-      warnStorageFailure("Wallet changes could not be saved. This session will continue without persistence.");
-      return false;
-    }
-  }
-
-  function loadRuntimeCache(currentState) {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.runtimeCache);
-      if (!raw) {
-        return null;
-      }
-
-      if (getUtf8ByteLength(raw) > MAX_RUNTIME_CACHE_STORAGE_BYTES) {
-        warnStorageFailure("Cached wallet history is too large to load. Click Refresh to rebuild it.");
-        return null;
-      }
-
-      const cached = normalizeRuntimeCache(JSON.parse(raw), currentState);
-      if (currentState.addresses.some((entry) => entry.needsHistoryRefresh)) {
-        // Older versions cached zero transaction amounts for uppercase Bech32.
-        // Persist the pruned cache before the canonicalized watchlist is saved.
-        if (cached) saveRuntimeCache(cached);
-        else clearRuntimeCache();
-      }
-      return cached;
-    } catch (error) {
-      warnStorageFailure("Cached wallet history could not be loaded. Click Refresh to rebuild it.");
-      return null;
-    }
-  }
-
-  function saveRuntimeCache(currentRuntime) {
-    if (isSyncingStorage || !isCurrentGeneration(dataGeneration)) return;
-    if (!currentRuntime.addressSnapshots?.length) {
-      return clearRuntimeCache();
-    }
-    for (const serialized of buildRuntimeCacheCandidates(currentRuntime)) {
-      try {
-        const encoded = JSON.stringify(serialized);
-        if (getUtf8ByteLength(encoded) > MAX_RUNTIME_CACHE_STORAGE_BYTES) {
-          continue;
-        }
-        localStorage.setItem(STORAGE_KEYS.runtimeCache, encoded);
-        return;
-      } catch (error) {
-        if (!isStorageQuotaError(error)) {
-          break;
-        }
-      }
-    }
-
-    warnStorageFailure("Wallet history could not be cached. This session will continue without persistence.");
-  }
-
-  function clearRuntimeCache() {
-    try {
-      localStorage.removeItem(STORAGE_KEYS.runtimeCache);
-    } catch (error) {
-      warnStorageFailure("Cached wallet history could not be deleted from this browser.");
-    }
-  }
-
-  function quarantineStoredState(raw) {
-    if (!raw) {
-      return false;
-    }
-
-    try {
-      localStorage.setItem(STORAGE_KEYS.stateQuarantine, raw);
-      return true;
-    } catch (error) {
-      // Best effort only. The caller still restores a usable default state.
-      return false;
-    }
-  }
-
   function warnStorageFailure(text) {
     if (!runtime || runtime.banner?.tone === "error") {
       return;
@@ -5176,642 +5282,6 @@
       tone: "warning",
       text,
     };
-  }
-
-  function getUtf8ByteLength(value) {
-    return new Blob([String(value || "")]).size;
-  }
-
-  function isStorageQuotaError(error) {
-    if (!error) {
-      return false;
-    }
-
-    return (
-      error.name === "QuotaExceededError" ||
-      error.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
-      error.code === 22 ||
-      error.code === 1014
-    );
-  }
-
-  function serializeInternalState(currentState) {
-    return {
-      groups: currentState.groups.map((group) => ({
-        id: group.id,
-        name: group.name,
-      })),
-      addresses: currentState.addresses.map((address) => ({
-        id: address.id,
-        address: address.address,
-        tags: normalizeAddressTags(address.tags),
-        groupId: address.groupId,
-        createdAt: address.createdAt,
-      })),
-      seededDemoWallets: normalizeDemoSeedKeys(currentState.seededDemoWallets),
-      hideBalances: currentState.hideBalances,
-      selectedRange: normalizeChartRange(currentState.selectedRange),
-      settings: {
-        activeWalletId: currentState.settings.activeWalletId || null,
-        activeAddressId: currentState.settings.activeAddressId || null,
-        displayUnit: ["BTC", "USD"].includes(currentState.settings.displayUnit)
-          ? currentState.settings.displayUnit
-          : "BTC",
-        fiatCurrency: normalizeFiatCurrency(currentState.settings.fiatCurrency),
-        hideDust: Boolean(currentState.settings.hideDust),
-        bitcoinNotation: normalizeBitcoinNotation(currentState.settings.bitcoinNotation),
-        showBackgroundGraphics: currentState.settings.showBackgroundGraphics !== false,
-      },
-      lastUpdated: currentState.lastUpdated,
-      satoshiDemoLastRefreshedAt: currentState.satoshiDemoLastRefreshedAt,
-    };
-  }
-
-  function normalizeImportedState(candidate) {
-    const next = buildDefaultState();
-    if (!candidate || typeof candidate !== "object") {
-      return next;
-    }
-
-    const groups = normalizeGroups(candidate.groups);
-    const groupNameToId = new Map(groups.map((group) => [group.name.toLowerCase(), group.id]));
-    const validGroupIds = new Set(groups.map((group) => group.id));
-    const addresses = normalizeAddresses(candidate.addresses, groupNameToId, validGroupIds);
-
-    next.groups = groups;
-    next.addresses = addresses;
-    next.hideBalances = Boolean(candidate.hideBalances);
-    next.seededDemoWallets = normalizeDemoSeedKeys(candidate.seededDemoWallets);
-    next.selectedRange = normalizeChartRange(candidate.selectedRange);
-    next.settings = {
-      ...createDefaultSettings(),
-      activeWalletId:
-        candidate.settings && typeof candidate.settings.activeWalletId === "string"
-          ? candidate.settings.activeWalletId
-          : null,
-      activeAddressId:
-        candidate.settings && typeof candidate.settings.activeAddressId === "string"
-          ? candidate.settings.activeAddressId
-          : null,
-      displayUnit:
-        candidate.settings &&
-        (candidate.settings.displayUnit === "BTC" || candidate.settings.displayUnit === "USD")
-          ? candidate.settings.displayUnit
-          : "BTC",
-      fiatCurrency: normalizeFiatCurrency(candidate.settings?.fiatCurrency),
-      hideDust: typeof candidate.settings?.hideDust === "boolean" ? candidate.settings.hideDust : true,
-      bitcoinNotation: normalizeBitcoinNotation(candidate.settings?.bitcoinNotation),
-      showBackgroundGraphics:
-        typeof candidate.settings?.showBackgroundGraphics === "boolean"
-          ? candidate.settings.showBackgroundGraphics
-          : true,
-    };
-    next.lastUpdated =
-      typeof candidate.lastUpdated === "string" && !Number.isNaN(Date.parse(candidate.lastUpdated))
-        ? candidate.lastUpdated
-        : null;
-    next.satoshiDemoLastRefreshedAt =
-      typeof candidate.satoshiDemoLastRefreshedAt === "string" &&
-      !Number.isNaN(Date.parse(candidate.satoshiDemoLastRefreshedAt))
-        ? candidate.satoshiDemoLastRefreshedAt
-        : null;
-
-    seedSatoshiDemoWallet(next);
-    return next;
-  }
-
-  function* buildRuntimeCacheCandidates(currentRuntime) {
-    yield serializeRuntimeCache(currentRuntime);
-    const compact = { includeIntradayPriceHistory: false, includeHourlyBalanceTimeline: false };
-    yield serializeRuntimeCache(currentRuntime, compact);
-    for (const maxTxEventsPerSnapshot of [500, 120, 60, 0]) {
-      yield serializeRuntimeCache(currentRuntime, { ...compact, maxTxEventsPerSnapshot });
-    }
-  }
-
-  function serializeRuntimeCache(
-    currentRuntime,
-    {
-      includeAddressDetails = false,
-      includeIntradayPriceHistory = true,
-      includeHourlyBalanceTimeline = true,
-      maxTxEventsPerSnapshot = Infinity,
-    } = {}
-  ) {
-    if (!Array.isArray(currentRuntime.addressSnapshots) || !currentRuntime.addressSnapshots.length) {
-      return null;
-    }
-
-    return {
-      historyScope: normalizeHistoryScope(currentRuntime.historyScope),
-      currentPriceUsd: Number.isFinite(currentRuntime.currentPriceUsd)
-        ? currentRuntime.currentPriceUsd
-        : null,
-      fiatExchangeRates: serializeNumberMap(currentRuntime.fiatExchangeRates),
-      priceHistory: serializeNumberMap(currentRuntime.priceHistory),
-      intradayPriceHistory: includeIntradayPriceHistory
-        ? serializeNumberMap(currentRuntime.intradayPriceHistory)
-        : [],
-      historyAvailable: Boolean(currentRuntime.historyAvailable),
-      historyMissingDays: Number.isFinite(currentRuntime.historyMissingDays)
-        ? currentRuntime.historyMissingDays
-        : 0,
-      approximationMode: Boolean(currentRuntime.approximationMode),
-      timelineStart: Number.isFinite(currentRuntime.timelineStart) ? currentRuntime.timelineStart : null,
-      timelineEnd: Number.isFinite(currentRuntime.timelineEnd) ? currentRuntime.timelineEnd : null,
-      intradayStart: Number.isFinite(currentRuntime.intradayStart) ? currentRuntime.intradayStart : null,
-      intradayEnd: Number.isFinite(currentRuntime.intradayEnd) ? currentRuntime.intradayEnd : null,
-      transactionDetails: serializeTransactionDetailsMap(currentRuntime.transactionDetailsByTxid),
-      addressSnapshots: currentRuntime.addressSnapshots.map((snapshot) => ({
-        entryId: snapshot.entry?.id || null,
-        provider: snapshot.provider || "",
-        balanceSats: Number(snapshot.balanceSats || 0),
-        usdValue: Number.isFinite(snapshot.usdValue) ? snapshot.usdValue : null,
-        approximate: Boolean(snapshot.approximate) || snapshot.txEvents.length > maxTxEventsPerSnapshot,
-        detailScope: maxTxEventsPerSnapshot === 0 ? "SUMMARY" : normalizeSnapshotDetailScope(snapshot.detailScope),
-        txEvents: serializeTxEvents(snapshot.txEvents, {
-          includeAddressDetails,
-          maxItems: maxTxEventsPerSnapshot,
-        }),
-        balanceTimeline: serializeBalanceTimeline(snapshot.balanceTimeline),
-        hourlyBalanceTimeline: includeHourlyBalanceTimeline
-          ? serializeBalanceTimeline(snapshot.hourlyBalanceTimeline)
-          : [],
-      })),
-    };
-  }
-
-  function normalizeRuntimeCache(candidate, currentState) {
-    if (!candidate || typeof candidate !== "object") {
-      return null;
-    }
-
-    const addressById = new Map(currentState.addresses.map((entry) => [entry.id, entry]));
-    const snapshots = Array.isArray(candidate.addressSnapshots)
-      ? candidate.addressSnapshots
-          .slice(0, MAX_WATCHED_ADDRESSES)
-          .map((snapshot) => normalizeCachedSnapshot(snapshot, addressById))
-          .filter(Boolean)
-      : [];
-
-    if (!snapshots.length) {
-      return null;
-    }
-
-    const timelineStart = isTimestamp(candidate.timelineStart) ? candidate.timelineStart : null;
-    const timelineEnd = isTimestamp(candidate.timelineEnd) ? candidate.timelineEnd : null;
-    const intradayStart = isTimestamp(candidate.intradayStart) ? candidate.intradayStart : null;
-    const intradayEnd = isTimestamp(candidate.intradayEnd) ? candidate.intradayEnd : null;
-    let rebuiltTimelines = false;
-    snapshots.forEach((snapshot) => {
-      rebuiltTimelines =
-        rebuildCachedSnapshotTimelinesIfNeeded(snapshot, {
-          timelineStart,
-          timelineEnd,
-          intradayStart,
-          intradayEnd,
-        }) || rebuiltTimelines;
-    });
-
-    return {
-      historyScope: normalizeHistoryScope(candidate.historyScope),
-      currentPriceUsd: Number.isFinite(candidate.currentPriceUsd) ? candidate.currentPriceUsd : null,
-      fiatExchangeRates: normalizeFiatExchangeRates(candidate.fiatExchangeRates),
-      priceHistory: deserializeNumberMap(candidate.priceHistory),
-      intradayPriceHistory: deserializeNumberMap(candidate.intradayPriceHistory),
-      historyAvailable: candidate.historyAvailable !== false,
-      historyMissingDays: Number.isFinite(candidate.historyMissingDays) ? candidate.historyMissingDays : 0,
-      approximationMode: Boolean(candidate.approximationMode),
-      timelineStart,
-      timelineEnd,
-      intradayStart,
-      intradayEnd,
-      addressSnapshots: snapshots,
-      transactionDetailsByTxid: normalizeTransactionDetailsMap(candidate.transactionDetails),
-      rebuiltTimelines,
-    };
-  }
-
-  function rebuildCachedSnapshotTimelinesIfNeeded(
-    snapshot,
-    { timelineStart, timelineEnd, intradayStart, intradayEnd }
-  ) {
-    if (!snapshot || normalizeSnapshotDetailScope(snapshot.detailScope) === "SUMMARY") {
-      return false;
-    }
-
-    let rebuilt = false;
-    if (
-      shouldRebuildCachedTimeline(snapshot.balanceTimeline, snapshot.txEvents, timelineStart, timelineEnd)
-    ) {
-      snapshot.balanceTimeline = buildDailyBalanceTimeline(
-        snapshot.balanceSats,
-        snapshot.txEvents,
-        timelineStart,
-        timelineEnd
-      );
-      rebuilt = true;
-    }
-
-    if (
-      shouldRebuildCachedTimeline(
-        snapshot.hourlyBalanceTimeline,
-        snapshot.txEvents,
-        intradayStart,
-        intradayEnd
-      )
-    ) {
-      snapshot.hourlyBalanceTimeline = buildIntervalBalanceTimeline(
-        snapshot.balanceSats,
-        snapshot.txEvents,
-        intradayStart,
-        intradayEnd,
-        HOUR_MS,
-        startOfUtcHour,
-        toHourKey
-      );
-      rebuilt = true;
-    }
-
-    return rebuilt;
-  }
-
-  function shouldRebuildCachedTimeline(points, txEvents, startTimestamp, endTimestamp) {
-    if (!Number.isFinite(startTimestamp) || !Number.isFinite(endTimestamp)) {
-      return false;
-    }
-
-    const events = Array.isArray(txEvents) ? txEvents : [];
-    if (!events.length) {
-      return false;
-    }
-
-    const validPoints = Array.isArray(points)
-      ? points.filter((point) => Number.isFinite(point?.timestamp) && Number.isFinite(point?.balanceSats))
-      : [];
-    if (!validPoints.length) {
-      return true;
-    }
-
-    const uniqueBalances = new Set(validPoints.map((point) => point.balanceSats));
-    if (uniqueBalances.size > 1) {
-      return false;
-    }
-
-    return events.some((event) => {
-      const timestamp = Number(event?.timestamp);
-      const netSats = Number(event?.netSats || 0);
-      return (
-        Number.isFinite(timestamp) &&
-        timestamp >= startTimestamp &&
-        timestamp <= endTimestamp &&
-        netSats !== 0
-      );
-    });
-  }
-
-  function normalizeCachedSnapshot(snapshot, addressById) {
-    if (!snapshot || typeof snapshot !== "object" || typeof snapshot.entryId !== "string") {
-      return null;
-    }
-
-    const entry = addressById.get(snapshot.entryId);
-    if (!entry || entry.needsHistoryRefresh || !isSatoshiAmount(snapshot.balanceSats)) {
-      return null;
-    }
-
-    return {
-      entry,
-      provider: typeof snapshot.provider === "string" ? snapshot.provider : "",
-      balanceSats: Number(snapshot.balanceSats || 0),
-      usdValue: Number.isFinite(snapshot.usdValue) ? snapshot.usdValue : null,
-      approximate: Boolean(snapshot.approximate),
-      detailScope: normalizeSnapshotDetailScope(snapshot.detailScope),
-      txEvents: normalizeCachedTxEvents(snapshot.txEvents),
-      balanceTimeline: normalizeCachedBalanceTimeline(snapshot.balanceTimeline),
-      hourlyBalanceTimeline: normalizeCachedBalanceTimeline(snapshot.hourlyBalanceTimeline),
-    };
-  }
-
-  function serializeNumberMap(source) {
-    if (!(source instanceof Map)) {
-      return [];
-    }
-
-    return [...source.entries()].filter(
-      (entry) => typeof entry[0] === "string" && Number.isFinite(entry[1])
-    );
-  }
-
-  function deserializeNumberMap(source) {
-    const map = new Map();
-    if (!Array.isArray(source)) {
-      return map;
-    }
-
-    source.slice(0, MAX_TIMELINE_POINTS).forEach((entry) => {
-      if (Array.isArray(entry) && typeof entry[0] === "string" && Number.isFinite(entry[1])) {
-        map.set(entry[0], entry[1]);
-      }
-    });
-    return map;
-  }
-
-  function normalizeFiatExchangeRates(source) {
-    const map = createDefaultFiatExchangeRates();
-    const candidate = source instanceof Map ? source : deserializeNumberMap(source);
-
-    SUPPORTED_FIAT_CURRENCIES.forEach((currency) => {
-      if (currency === "USD") {
-        return;
-      }
-
-      const rate = candidate.get(currency);
-      if (Number.isFinite(rate) && rate > 0) {
-        map.set(currency, rate);
-      }
-    });
-
-    return map;
-  }
-
-  function mergeFiatExchangeRates(preferred, fallback) {
-    const merged = normalizeFiatExchangeRates(fallback);
-    normalizeFiatExchangeRates(preferred).forEach((value, key) => {
-      merged.set(key, value);
-    });
-    return merged;
-  }
-
-  function mergeNumberMaps(fallback, preferred) {
-    const merged = fallback instanceof Map ? new Map(fallback) : new Map();
-    if (preferred instanceof Map) {
-      preferred.forEach((value, key) => {
-        if (typeof key === "string" && Number.isFinite(value)) {
-          merged.set(key, value);
-        }
-      });
-    }
-    return merged;
-  }
-
-  function areNumberMapsEqual(left, right) {
-    const normalizedLeft = left instanceof Map ? left : new Map();
-    const normalizedRight = right instanceof Map ? right : new Map();
-    if (normalizedLeft.size !== normalizedRight.size) {
-      return false;
-    }
-
-    for (const [key, value] of normalizedLeft.entries()) {
-      if (normalizedRight.get(key) !== value) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  function serializeTxEvents(
-    source,
-    {
-      includeAddressDetails = true,
-      maxItems = Infinity,
-    } = {}
-  ) {
-    if (!Array.isArray(source)) {
-      return [];
-    }
-
-    const limit = Number.isFinite(maxItems) && maxItems >= 0
-      ? Math.min(maxItems, MAX_TRANSACTIONS_PER_ADDRESS) : MAX_TRANSACTIONS_PER_ADDRESS;
-    return source.slice(0, limit).map((event) => ({
-      txid: event.txid,
-      timestamp: Number(event.timestamp || 0),
-      confirmed: Boolean(event.confirmed),
-      receivedSats: Number(event.receivedSats || 0),
-      sentSats: Number(event.sentSats || 0),
-      netSats: Number(event.netSats || 0),
-      feeSats: Number.isFinite(event.feeSats) ? Number(event.feeSats) : null,
-      feeRateSatVb: Number.isFinite(event.feeRateSatVb) ? Number(event.feeRateSatVb) : null,
-      inputAddresses:
-        includeAddressDetails && Array.isArray(event.inputAddresses) ? event.inputAddresses : [],
-      outputAddresses:
-        includeAddressDetails && Array.isArray(event.outputAddresses) ? event.outputAddresses : [],
-      walletInputAddresses:
-        includeAddressDetails && Array.isArray(event.walletInputAddresses)
-          ? event.walletInputAddresses
-          : [],
-      walletOutputAddresses:
-        includeAddressDetails && Array.isArray(event.walletOutputAddresses)
-          ? event.walletOutputAddresses
-          : [],
-    }));
-
-  }
-
-  function normalizeCachedTxEvents(source) {
-    if (!Array.isArray(source)) {
-      return [];
-    }
-
-    return source
-      .slice(0, MAX_TRANSACTIONS_PER_ADDRESS)
-      .map((event) => {
-        if (!event || !isValidTxid(event.txid) || !isTimestamp(event.timestamp) ||
-          !isSatoshiAmount(event.receivedSats) || !isSatoshiAmount(event.sentSats) ||
-          event.netSats !== event.receivedSats - event.sentSats) {
-          return null;
-        }
-
-        return {
-          txid: event.txid,
-          timestamp: Number(event.timestamp || 0),
-          confirmed: Boolean(event.confirmed),
-          receivedSats: Number(event.receivedSats || 0),
-          sentSats: Number(event.sentSats || 0),
-          netSats: Number(event.netSats || 0),
-          feeSats: Number.isFinite(event.feeSats) ? Number(event.feeSats) : null,
-          feeRateSatVb: Number.isFinite(event.feeRateSatVb) ? Number(event.feeRateSatVb) : null,
-          inputAddresses: Array.isArray(event.inputAddresses)
-            ? uniqueStrings(event.inputAddresses.filter((entry) => typeof entry === "string" && entry.trim()))
-            : [],
-          outputAddresses: Array.isArray(event.outputAddresses)
-            ? uniqueStrings(event.outputAddresses.filter((entry) => typeof entry === "string" && entry.trim()))
-            : [],
-          walletInputAddresses: Array.isArray(event.walletInputAddresses)
-            ? uniqueStrings(
-                event.walletInputAddresses.filter((entry) => typeof entry === "string" && entry.trim())
-              )
-            : [],
-          walletOutputAddresses: Array.isArray(event.walletOutputAddresses)
-            ? uniqueStrings(
-                event.walletOutputAddresses.filter((entry) => typeof entry === "string" && entry.trim())
-              )
-            : [],
-        };
-      })
-      .filter(Boolean);
-  }
-
-  function serializeTransactionDetailsMap(source) {
-    const entries = source instanceof Map ? [...source.entries()] : [];
-    return entries
-      .filter(([txid, details]) => isValidTxid(txid) && details && typeof details === "object")
-      .slice(-MAX_TRANSACTIONS_PER_ADDRESS)
-      .map(([txid, details]) => [
-        txid,
-        normalizeTransactionDetails({
-          txid,
-          ...details,
-        }),
-      ])
-      .filter(([, details]) => details);
-  }
-
-  function normalizeTransactionDetailsMap(source) {
-    if (!Array.isArray(source)) {
-      return new Map();
-    }
-
-    const detailsByTxid = new Map();
-    source.slice(-MAX_TRANSACTIONS_PER_ADDRESS).forEach((entry) => {
-      if (!Array.isArray(entry) || entry.length < 2 || !isValidTxid(entry[0])) {
-        return;
-      }
-
-      const details = normalizeTransactionDetails({
-        ...entry[1],
-        txid: entry[0],
-      });
-      if (details) {
-        detailsByTxid.set(entry[0], details);
-      }
-    });
-    return detailsByTxid;
-  }
-
-  function normalizeTransactionDetails(candidate) {
-    if (!candidate || typeof candidate !== "object" || !isValidTxid(candidate.txid)) {
-      return null;
-    }
-
-    return {
-      txid: candidate.txid,
-      feeSats: Number.isFinite(candidate.feeSats) ? Number(candidate.feeSats) : null,
-      feeRateSatVb: Number.isFinite(candidate.feeRateSatVb)
-        ? Number(candidate.feeRateSatVb)
-        : null,
-      inputAddresses: Array.isArray(candidate.inputAddresses)
-        ? uniqueStrings(candidate.inputAddresses.filter((entry) => typeof entry === "string" && entry.trim()))
-        : [],
-      outputAddresses: Array.isArray(candidate.outputAddresses)
-        ? uniqueStrings(candidate.outputAddresses.filter((entry) => typeof entry === "string" && entry.trim()))
-        : [],
-    };
-  }
-
-  function serializeBalanceTimeline(source) {
-    if (!Array.isArray(source)) {
-      return [];
-    }
-
-    return source.map((point) => ({
-      dateKey: point.dateKey,
-      timestamp: Number(point.timestamp || 0),
-      balanceSats: Number(point.balanceSats || 0),
-    }));
-  }
-
-  function normalizeCachedBalanceTimeline(source) {
-    if (!Array.isArray(source)) {
-      return [];
-    }
-
-    return source
-      .slice(0, MAX_TIMELINE_POINTS)
-      .map((point) => {
-        if (!point || typeof point.dateKey !== "string" || !isTimestamp(point.timestamp) ||
-            !isSatoshiAmount(point.balanceSats)) {
-          return null;
-        }
-
-        return {
-          dateKey: point.dateKey,
-          timestamp: Number(point.timestamp || 0),
-          balanceSats: Number(point.balanceSats || 0),
-        };
-      })
-      .filter(Boolean);
-  }
-
-  function normalizeGroups(rawGroups) {
-    const source = (Array.isArray(rawGroups) && rawGroups.length ? rawGroups : DEFAULT_WALLET_NAMES).slice(
-      0,
-      MAX_WALLETS
-    );
-    const normalized = [];
-    const seen = new Set();
-
-    source.forEach((group) => {
-      const name = typeof group === "string" ? group : group?.name;
-      const normalizedName = normalizeWalletName(name);
-      if (!normalizedName) {
-        return;
-      }
-
-      const key = normalizedName.toLowerCase();
-      if (seen.has(key)) {
-        return;
-      }
-
-      seen.add(key);
-      normalized.push({
-        id: typeof group === "object" && typeof group.id === "string" ? group.id : createId("grp"),
-        name: normalizedName,
-      });
-    });
-
-    return normalized.length ? normalized : buildDefaultState().groups;
-  }
-
-  function normalizeAddresses(rawAddresses, groupNameToId, validGroupIds) {
-    const source = Array.isArray(rawAddresses) ? rawAddresses.slice(0, MAX_WATCHED_ADDRESSES) : [];
-    const seen = new Set();
-    const normalized = [];
-
-    source.forEach((entry) => {
-      const address = normalizeBitcoinAddress(entry?.address);
-      if (!address) {
-        return;
-      }
-
-      const key = normalizeBitcoinAddress(address);
-      if (seen.has(key)) {
-        return;
-      }
-      seen.add(key);
-
-      let groupId = null;
-      if (typeof entry.groupId === "string" && validGroupIds.has(entry.groupId)) {
-        groupId = entry.groupId;
-      } else if (typeof entry.group === "string") {
-        groupId = groupNameToId.get(entry.group.toLowerCase()) || null;
-      }
-
-      normalized.push({
-        id: typeof entry.id === "string" ? entry.id : createId("addr"),
-        address,
-        needsHistoryRefresh: address !== entry.address.trim(),
-        tags: normalizeAddressTags(entry.tags),
-        groupId,
-        createdAt:
-          typeof entry.createdAt === "string" && !Number.isNaN(Date.parse(entry.createdAt))
-            ? entry.createdAt
-            : new Date().toISOString(),
-      });
-    });
-
-    return normalized;
   }
 
   function normalizeAddressTag(value) {
@@ -6288,861 +5758,6 @@
   // API layer
   // ---------------------------------------------------------------------------
 
-  const APILayer = {
-    async fetchAddressSummary(address) {
-      const generation = dataGeneration;
-      const normalizedAddress = await requireValidMainnetBitcoinAddress(address);
-      requireCurrentGeneration(generation);
-      const attempts = ADDRESS_API_PROVIDERS.map((provider) => async () => {
-        const summary = await fetchAddressSummaryFromProvider(provider, normalizedAddress);
-        return {
-          provider: provider.name,
-          summary,
-        };
-      });
-
-      return withFallback(attempts, "Address summary lookup failed.");
-    },
-
-    async fetchAddressBundle(address, startTimestamp) {
-      const generation = dataGeneration;
-      const normalizedAddress = await requireValidMainnetBitcoinAddress(address);
-      requireCurrentGeneration(generation);
-      const attempts = ADDRESS_API_PROVIDERS.map((provider) => async () => {
-        const bundle = await fetchAddressBundleFromProvider(provider, normalizedAddress, startTimestamp);
-        return {
-          provider: provider.name,
-          bundle,
-        };
-      });
-
-      return withFallback(attempts, "Address lookup failed.");
-    },
-
-    async fetchAddressDelta(address, knownTxids) {
-      const generation = dataGeneration;
-      const normalizedAddress = await requireValidMainnetBitcoinAddress(address);
-      requireCurrentGeneration(generation);
-      const attempts = ADDRESS_API_PROVIDERS.map((provider) => async () => {
-        const bundle = await fetchAddressDeltaFromProvider(provider, normalizedAddress, knownTxids);
-        return {
-          provider: provider.name,
-          bundle,
-        };
-      });
-
-      return withFallback(attempts, "Incremental address lookup failed.");
-    },
-
-    async fetchTransactionDetails(txid) {
-      const normalizedTxid = requireValidTransactionId(txid);
-      const attempts = ADDRESS_API_PROVIDERS.map((provider) => async () => {
-        const transaction = await fetchTransactionFromProvider(provider, normalizedTxid);
-        const details = buildTransactionTechnicalDetails(transaction);
-        if (!details) {
-          throw createApiError("Transaction detail response was incomplete.");
-        }
-        return {
-          provider: provider.name,
-          details,
-        };
-      });
-
-      return withFallback(attempts, "Transaction detail lookup failed.");
-    },
-
-    async fetchCurrentPriceUsd() {
-      return fetchCurrentPriceQuote();
-    },
-
-    async fetchFiatExchangeRates() {
-      return fetchFiatExchangeRates();
-    },
-
-    async fetchMarketData(startTimestamp, endTimestamp, displayFiatCurrency = "USD") {
-      const generation = dataGeneration;
-      let currentPrice = null;
-      let currentPriceError = null;
-      let fiatExchangeRates = createDefaultFiatExchangeRates();
-      const [currentPriceResult, fiatExchangeRatesResult, displayFiatMarketResult] =
-        await Promise.allSettled([
-        fetchCurrentPriceQuote(),
-        fetchFiatExchangeRates(),
-        fetchDirectFiatMarketData(displayFiatCurrency, startTimestamp, endTimestamp),
-      ]);
-      requireCurrentGeneration(generation);
-      if (currentPriceResult.status === "fulfilled") {
-        currentPrice = currentPriceResult.value;
-      } else {
-        currentPriceError = currentPriceResult.reason;
-      }
-      if (fiatExchangeRatesResult.status === "fulfilled") {
-        fiatExchangeRates = fiatExchangeRatesResult.value;
-      }
-      const displayFiatMarket =
-        displayFiatMarketResult.status === "fulfilled" ? displayFiatMarketResult.value : null;
-
-      let priceHistory = new Map();
-      let historyAvailable = true;
-      let historyMissingDays = 0;
-      try {
-        const historyResult = await fetchHistoricalPriceSeries(startTimestamp, endTimestamp);
-        priceHistory = historyResult.series;
-        historyMissingDays = historyResult.missingDays;
-        historyAvailable = priceHistory.size > 0;
-      } catch (error) {
-        historyAvailable = false;
-      }
-
-      requireCurrentGeneration(generation);
-      if ((!currentPrice || !Number.isFinite(currentPrice.price)) && priceHistory.size) {
-        currentPrice = {
-          provider: "Historical close fallback",
-          price: getLastFinitePriceFromHistory(priceHistory),
-        };
-      }
-
-      if (!currentPrice || !Number.isFinite(currentPrice.price)) {
-        throw new Error(
-          currentPriceError?.message || "Current BTC/USD price and historical fallback both failed."
-        );
-      }
-
-      const intradayStart = startOfUtcHour(Date.now() - 23 * HOUR_MS);
-      const intradayEnd = Date.now();
-      let intradayPriceHistory = new Map();
-      try {
-        intradayPriceHistory = await fetchIntradayPriceSeries(
-          intradayStart,
-          intradayEnd,
-          currentPrice.price
-        );
-      } catch (error) {
-        intradayPriceHistory = new Map();
-      }
-
-      requireCurrentGeneration(generation);
-      return {
-        currentPriceUsd: currentPrice.price,
-        fiatExchangeRates,
-        displayFiatMarket,
-        priceHistory,
-        intradayPriceHistory,
-        intradayStart,
-        intradayEnd,
-        historyAvailable,
-        historyMissingDays,
-        provider: currentPrice.provider,
-      };
-    },
-  };
-
-  // Privacy note: market-data requests do not reveal watched addresses, but the
-  // timing pattern of price fetches alongside address fetches could fingerprint
-  // a Bitkit Watch session to the price-data provider.
-  function fetchCurrentPriceQuote() {
-    return fetchCurrentProductQuote("BTC-USD");
-  }
-
-  function fetchCurrentProductQuote(productId) {
-    const quoteCurrency = getProductQuoteCurrency(productId);
-    return withFallback(
-      [
-        async () => {
-          const response = await fetchJson(
-            `https://api.exchange.coinbase.com/products/${encodeURIComponent(productId)}/ticker`,
-            {
-              providerName: "Coinbase Exchange",
-              validate: validateTickerPayload,
-            }
-          );
-          return { provider: "Coinbase Exchange", price: Number(response.price) };
-        },
-        async () => {
-          const response = await fetchJson(
-            `https://api.coinbase.com/v2/prices/${encodeURIComponent(productId)}/spot`,
-            {
-              providerName: "Coinbase Spot",
-              validate: validateSpotPayload,
-            }
-          );
-          return { provider: "Coinbase Spot", price: Number(response.data.amount) };
-        },
-        async () => {
-          const response = await fetchJson(
-            "https://api.coinbase.com/v2/exchange-rates?currency=BTC",
-            {
-              providerName: "Coinbase Rates",
-              validate: validateRatesPayload,
-            }
-          );
-          return { provider: "Coinbase Rates", price: Number(response.data.rates[quoteCurrency]) };
-        },
-      ],
-      `Current ${productId} price unavailable.`
-    );
-  }
-
-  async function fetchFiatExchangeRates() {
-    const response = await fetchJson("https://api.coinbase.com/v2/exchange-rates?currency=BTC", {
-      providerName: "Coinbase Rates",
-      validate: validateRatesPayload,
-    });
-    const btcRates = response?.data?.rates || {};
-    const usdPerBtc = Number(btcRates.USD);
-    if (!Number.isFinite(usdPerBtc) || usdPerBtc <= 0) {
-      throw new Error("Current fiat exchange rates unavailable.");
-    }
-
-    const nextRates = createDefaultFiatExchangeRates();
-    SUPPORTED_FIAT_CURRENCIES.forEach((currency) => {
-      if (currency === "USD") {
-        return;
-      }
-
-      const quote = Number(btcRates[currency]);
-      if (Number.isFinite(quote) && quote > 0) {
-        nextRates.set(currency, quote / usdPerBtc);
-      }
-    });
-
-    return nextRates;
-  }
-
-  // Privacy note: sends a watched address to a third-party block explorer API.
-  // The provider can correlate the address with the requester's IP. Batch calls
-  // (with capped concurrency during refresh) expose multiple addresses in a short
-  // window, which strengthens the correlation. Users concerned about this should
-  // use Tor or a VPN (see FAQ).
-  async function fetchAddressSummaryFromProvider(provider, address) {
-    const encoded = encodeURIComponent(address);
-    return fetchJson(`${provider.baseUrl}/address/${encoded}`, {
-      providerName: provider.name,
-      validate: (payload) => validateAddressSummaryPayload(payload, address),
-    });
-  }
-
-  // Privacy: fetches full transaction history for an address. Same IP-correlation
-  // risk as fetchAddressSummaryFromProvider above.
-  async function fetchAddressBundleFromProvider(provider, address, startTimestamp) {
-    const generation = dataGeneration;
-    const encoded = encodeURIComponent(address);
-    const summary = await fetchJson(`${provider.baseUrl}/address/${encoded}`, {
-      providerName: provider.name,
-      validate: (payload) => validateAddressSummaryPayload(payload, address),
-    });
-    requireCurrentGeneration(generation);
-    const txResult = await fetchAddressTransactions(provider, address, startTimestamp);
-
-    return {
-      summary,
-      transactions: txResult.transactions,
-      truncated: txResult.truncated,
-    };
-  }
-
-  async function fetchAddressDeltaFromProvider(provider, address, knownTxids) {
-    const generation = dataGeneration;
-    const encoded = encodeURIComponent(address);
-    const summary = await fetchJson(`${provider.baseUrl}/address/${encoded}`, {
-      providerName: provider.name,
-      validate: (payload) => validateAddressSummaryPayload(payload, address),
-    });
-    requireCurrentGeneration(generation);
-    const txResult = await fetchAddressTransactionsUntilKnown(provider, address, knownTxids);
-
-    return {
-      summary,
-      transactions: txResult.transactions,
-      truncated: txResult.truncated,
-      overlapFound: txResult.overlapFound,
-    };
-  }
-
-  async function fetchTransactionFromProvider(provider, txid) {
-    const encoded = encodeURIComponent(txid);
-    return fetchJson(`${provider.baseUrl}/tx/${encoded}`, {
-      providerName: provider.name,
-      validate: (payload) => validateTransactionPayload(payload, txid),
-      maxBytes: MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES,
-    });
-  }
-
-  async function fetchAddressTransactions(provider, address, startTimestamp) {
-    const generation = dataGeneration;
-    const encoded = encodeURIComponent(address);
-    const firstPage = await fetchJson(`${provider.baseUrl}/address/${encoded}/txs`, {
-      providerName: provider.name,
-      validate: validateTransactionListPayload,
-      maxBytes: MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES,
-    });
-    const collected = [];
-    const seen = new Set();
-
-    const appendTransactions = (transactions) => {
-      transactions.forEach((tx) => {
-        if (collected.length >= MAX_TRANSACTIONS_PER_ADDRESS) {
-          return;
-        }
-        if (!seen.has(tx.txid)) {
-          seen.add(tx.txid);
-          collected.push(tx);
-        }
-      });
-    };
-
-    appendTransactions(firstPage);
-
-    const confirmedOnly = firstPage.filter((tx) => tx.status?.confirmed);
-    let lastSeen = confirmedOnly.at(-1)?.txid || null;
-    let oldestConfirmedTime = confirmedOnly.at(-1)?.status?.block_time || Number.MAX_SAFE_INTEGER;
-    let pageCount = 0;
-    while (
-      lastSeen &&
-      oldestConfirmedTime > startTimestamp / 1000 &&
-      pageCount < MAX_TRANSACTION_PAGES &&
-      collected.length < MAX_TRANSACTIONS_PER_ADDRESS
-    ) {
-      requireCurrentGeneration(generation);
-      const nextPage = await fetchJson(`${provider.baseUrl}/address/${encoded}/txs/chain/${lastSeen}`, {
-        providerName: provider.name,
-        validate: validateTransactionListPayload,
-        maxBytes: MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES,
-      });
-      if (!nextPage.length) {
-        break;
-      }
-
-      appendTransactions(nextPage);
-      lastSeen = nextPage.at(-1)?.txid || null;
-      oldestConfirmedTime = nextPage.at(-1)?.status?.block_time || 0;
-      pageCount += 1;
-    }
-
-    return {
-      transactions: collected.filter((tx) => {
-        if (!tx.status?.confirmed) {
-          return true;
-        }
-        return (tx.status.block_time || 0) * 1000 >= startTimestamp;
-      }),
-      truncated: Boolean(
-        lastSeen &&
-          oldestConfirmedTime > startTimestamp / 1000 &&
-          (pageCount >= MAX_TRANSACTION_PAGES || collected.length >= MAX_TRANSACTIONS_PER_ADDRESS)
-      ),
-    };
-  }
-
-  async function fetchAddressTransactionsUntilKnown(provider, address, knownTxids) {
-    const generation = dataGeneration;
-    const encoded = encodeURIComponent(address);
-    const known = knownTxids instanceof Set ? knownTxids : new Set();
-    const collected = [];
-    const seen = new Set();
-    let overlapFound = false;
-    const appendTransactions = (transactions) => {
-      transactions.forEach((tx) => {
-        if (known.has(tx.txid)) {
-          overlapFound = true;
-          return;
-        }
-        if (collected.length >= MAX_TRANSACTIONS_PER_ADDRESS || seen.has(tx.txid)) {
-          return;
-        }
-        seen.add(tx.txid);
-        collected.push(tx);
-      });
-    };
-
-    const firstPage = await fetchJson(`${provider.baseUrl}/address/${encoded}/txs`, {
-      providerName: provider.name,
-      validate: validateTransactionListPayload,
-      maxBytes: MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES,
-    });
-    appendTransactions(firstPage);
-
-    const confirmedOnly = firstPage.filter((tx) => tx.status?.confirmed);
-    let lastSeen = confirmedOnly.at(-1)?.txid || null;
-    let pageCount = 0;
-    while (
-      lastSeen &&
-      !overlapFound &&
-      pageCount < MAX_TRANSACTION_PAGES &&
-      collected.length < MAX_TRANSACTIONS_PER_ADDRESS
-    ) {
-      requireCurrentGeneration(generation);
-      const nextPage = await fetchJson(`${provider.baseUrl}/address/${encoded}/txs/chain/${lastSeen}`, {
-        providerName: provider.name,
-        validate: validateTransactionListPayload,
-        maxBytes: MAX_EXPLORER_TRANSACTION_RESPONSE_BYTES,
-      });
-      if (!nextPage.length) {
-        lastSeen = null;
-        break;
-      }
-
-      appendTransactions(nextPage);
-      lastSeen = nextPage.at(-1)?.txid || null;
-      pageCount += 1;
-    }
-
-    return {
-      transactions: collected,
-      overlapFound,
-      truncated: Boolean(
-        !overlapFound &&
-          lastSeen &&
-          (pageCount >= MAX_TRANSACTION_PAGES || collected.length >= MAX_TRANSACTIONS_PER_ADDRESS)
-      ),
-    };
-  }
-
-  async function fetchHistoricalPriceSeries(startTimestamp, endTimestamp) {
-    return fetchProductHistoricalPriceSeries("BTC-USD", startTimestamp, endTimestamp);
-  }
-
-  async function fetchProductHistoricalPriceSeries(productId, startTimestamp, endTimestamp) {
-    const generation = dataGeneration;
-    const requests = buildCandleRequests(startTimestamp, endTimestamp, 295);
-    const candleResponses = await allSettledWithConcurrency(
-      requests, MAX_EXPLORER_CONCURRENCY, (request) =>
-        fetchJson(
-          `https://api.exchange.coinbase.com/products/${encodeURIComponent(productId)}/candles?granularity=86400&start=${encodeURIComponent(
-            new Date(request.start).toISOString()
-          )}&end=${encodeURIComponent(new Date(request.end).toISOString())}`,
-          {
-            providerName: "Coinbase Exchange",
-            validate: validateCandlesPayload,
-          }
-        )
-    );
-
-    requireCurrentGeneration(generation);
-    const closeByDay = new Map();
-    candleResponses.forEach((response) => {
-      if (response.status !== "fulfilled") {
-        return;
-      }
-
-      response.value.forEach((candle) => {
-        const timestamp = candle[0] * 1000;
-        const dateKey = toDateKey(timestamp);
-        closeByDay.set(dateKey, Number(candle[4]));
-      });
-    });
-
-    if (!closeByDay.size) {
-      return {
-        series: closeByDay,
-        missingDays: ONE_YEAR_DAYS,
-      };
-    }
-
-    let lastKnown = null;
-    const pendingSpotDates = [];
-    for (let cursor = startOfUtcDay(startTimestamp); cursor <= endTimestamp; cursor += DAY_MS) {
-      const key = toDateKey(cursor);
-      if (closeByDay.has(key)) {
-        lastKnown = closeByDay.get(key);
-      } else if (lastKnown !== null) {
-        closeByDay.set(key, lastKnown);
-      } else {
-        pendingSpotDates.push(key);
-      }
-    }
-
-    if (pendingSpotDates.length && pendingSpotDates.length <= 45) {
-      for (const dateKey of pendingSpotDates) {
-        requireCurrentGeneration(generation);
-        try {
-          const response = await fetchJson(
-            `https://api.coinbase.com/v2/prices/${encodeURIComponent(productId)}/spot?date=${encodeURIComponent(dateKey)}`,
-            {
-              providerName: "Coinbase Spot",
-              validate: validateSpotPayload,
-            }
-          );
-          closeByDay.set(dateKey, Number(response.data.amount));
-        } catch (error) {
-          // Leave the gap empty. Rendering layers handle missing price points.
-        }
-      }
-    }
-
-    const firstKnown = getFirstFinitePriceFromHistory(closeByDay);
-    let missingDays = 0;
-    for (let cursor = startOfUtcDay(startTimestamp); cursor <= endTimestamp; cursor += DAY_MS) {
-      const key = toDateKey(cursor);
-      if (!closeByDay.has(key) && Number.isFinite(firstKnown)) {
-        closeByDay.set(key, firstKnown);
-      }
-      if (!closeByDay.has(key)) {
-        missingDays += 1;
-      }
-    }
-
-    return {
-      series: closeByDay,
-      missingDays,
-    };
-  }
-
-  async function fetchIntradayPriceSeries(startTimestamp, endTimestamp, fallbackPrice) {
-    return fetchProductIntradayPriceSeries("BTC-USD", startTimestamp, endTimestamp, fallbackPrice);
-  }
-
-  async function fetchProductIntradayPriceSeries(productId, startTimestamp, endTimestamp, fallbackPrice) {
-    const response = await fetchJson(
-      `https://api.exchange.coinbase.com/products/${encodeURIComponent(productId)}/candles?granularity=3600&start=${encodeURIComponent(
-        new Date(startTimestamp).toISOString()
-      )}&end=${encodeURIComponent(new Date(endTimestamp).toISOString())}`,
-      {
-        providerName: "Coinbase Exchange",
-        validate: validateCandlesPayload,
-      }
-    );
-
-    const closeByHour = new Map();
-    response.forEach((candle) => {
-      closeByHour.set(toHourKey(candle[0] * 1000), Number(candle[4]));
-    });
-
-    let lastKnown = null;
-    for (let cursor = startOfUtcHour(startTimestamp); cursor <= endTimestamp; cursor += HOUR_MS) {
-      const key = toHourKey(cursor);
-      if (closeByHour.has(key)) {
-        lastKnown = closeByHour.get(key);
-      } else if (lastKnown !== null) {
-        closeByHour.set(key, lastKnown);
-      } else if (Number.isFinite(fallbackPrice)) {
-        closeByHour.set(key, fallbackPrice);
-      }
-    }
-
-    return closeByHour;
-  }
-
-  async function fetchDirectFiatMarketData(
-    fiatCurrency,
-    startTimestamp,
-    endTimestamp,
-    {
-      intradayStart = startOfUtcHour(Date.now() - 23 * HOUR_MS),
-      intradayEnd = Date.now(),
-    } = {}
-  ) {
-    const generation = dataGeneration;
-    const normalizedFiat = normalizeFiatCurrency(fiatCurrency);
-    const productId = getDirectFiatProductId(normalizedFiat);
-    if (!productId) {
-      return null;
-    }
-
-    let currentPrice = null;
-    let currentPriceError = null;
-    try {
-      currentPrice = await fetchCurrentProductQuote(productId);
-    } catch (error) {
-      currentPriceError = error;
-    }
-
-    requireCurrentGeneration(generation);
-    let priceHistory = new Map();
-    try {
-      const historyResult = await fetchProductHistoricalPriceSeries(productId, startTimestamp, endTimestamp);
-      priceHistory = historyResult.series;
-    } catch (error) {
-      priceHistory = new Map();
-    }
-
-    requireCurrentGeneration(generation);
-    if ((!currentPrice || !Number.isFinite(currentPrice.price)) && priceHistory.size) {
-      currentPrice = {
-        provider: "Historical close fallback",
-        price: getLastFinitePriceFromHistory(priceHistory),
-      };
-    }
-
-    if (!currentPrice || !Number.isFinite(currentPrice.price)) {
-      throw new Error(currentPriceError?.message || `Current ${productId} price unavailable.`);
-    }
-
-    let intradayPriceHistory = new Map();
-    try {
-      intradayPriceHistory = await fetchProductIntradayPriceSeries(
-        productId,
-        intradayStart,
-        intradayEnd,
-        currentPrice.price
-      );
-    } catch (error) {
-      intradayPriceHistory = new Map();
-    }
-
-    requireCurrentGeneration(generation);
-    return {
-      currency: normalizedFiat,
-      productId,
-      currentPrice: currentPrice.price,
-      priceHistory,
-      intradayPriceHistory,
-      intradayStart,
-      intradayEnd,
-      provider: currentPrice.provider,
-    };
-  }
-
-  function buildCandleRequests(startTimestamp, endTimestamp, maxDaysPerRequest) {
-    const requests = [];
-    let cursor = startOfUtcDay(startTimestamp);
-    while (cursor < endTimestamp) {
-      const chunkEnd = Math.min(cursor + (maxDaysPerRequest - 1) * DAY_MS, endTimestamp);
-      requests.push({ start: cursor, end: chunkEnd });
-      cursor = chunkEnd + DAY_MS;
-    }
-    return requests;
-  }
-
-  function getHistoryStartTimestampFromAddressResults(addressResults) {
-    const timestamps = addressResults.flatMap((result) => {
-      if (result.status !== "fulfilled" || !Array.isArray(result.value?.bundle?.transactions)) {
-        return [];
-      }
-
-      return result.value.bundle.transactions
-        .map((tx) => Number(tx?.status?.block_time || 0) * 1000)
-        .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
-    });
-
-    if (!timestamps.length) {
-      return null;
-    }
-
-    return startOfUtcDay(Math.min(...timestamps));
-  }
-
-  async function allSettledWithConcurrency(items, maxConcurrent, worker) {
-    const generation = dataGeneration;
-    const source = Array.isArray(items) ? items : [];
-    const results = new Array(source.length);
-    let nextIndex = 0;
-    const workerCount = Math.min(Math.max(1, maxConcurrent), source.length);
-
-    async function runWorker() {
-      while (nextIndex < source.length) {
-        requireCurrentGeneration(generation);
-        const index = nextIndex;
-        nextIndex += 1;
-        try {
-          results[index] = {
-            status: "fulfilled",
-            value: await worker(source[index], index),
-          };
-        } catch (error) {
-          results[index] = {
-            status: "rejected",
-            reason: error,
-          };
-        }
-      }
-    }
-
-    await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
-    requireCurrentGeneration(generation);
-    return results;
-  }
-
-  async function requireValidMainnetBitcoinAddress(address) {
-    const normalized = normalizeBitcoinAddress(address);
-    if (!(await ValidationLayer.isValidMainnetBitcoinAddress(normalized))) {
-      throw createApiError("Skipped invalid stored Bitcoin address.");
-    }
-    return normalized;
-  }
-
-  function requireValidTransactionId(value) {
-    if (!isValidTxid(value)) {
-      throw createApiError("Invalid transaction id.");
-    }
-    return value;
-  }
-
-  function validateTickerPayload(payload) {
-    if (!payload || !Number.isFinite(Number(payload.price)) || Number(payload.price) <= 0) {
-      throw new Error("Invalid price ticker response.");
-    }
-  }
-
-  function validateSpotPayload(payload) {
-    if (!payload?.data || !Number.isFinite(Number(payload.data.amount)) || Number(payload.data.amount) <= 0) {
-      throw new Error("Invalid spot price response.");
-    }
-  }
-
-  function validateRatesPayload(payload) {
-    if (!payload?.data?.rates || !Number.isFinite(Number(payload.data.rates.USD)) || Number(payload.data.rates.USD) <= 0) {
-      throw new Error("Invalid exchange-rate response.");
-    }
-  }
-
-  async function fetchJson(url, { providerName = "", validate = null, maxBytes = MAX_API_RESPONSE_BYTES } = {}) {
-    const generation = dataGeneration;
-    const controller = new AbortController();
-    activeRequests.add(controller);
-    const timeout = window.setTimeout(() => controller.abort(), 15000);
-
-    try {
-      const response = await fetch(url, {
-        headers: {
-          Accept: "application/json",
-        },
-        mode: "cors",
-        credentials: "omit",
-        redirect: "error",
-        cache: "no-store",
-        referrerPolicy: "no-referrer",
-        signal: controller.signal,
-      });
-
-      requireCurrentGeneration(generation);
-      if (!response.ok) {
-        await response.body?.cancel();
-        throw createApiError(`${response.status} ${response.statusText}`.trim(), {
-          status: response.status,
-          providerName,
-          url,
-        });
-      }
-      const payload = await readJsonResponse(response, maxBytes);
-      requireCurrentGeneration(generation);
-      if (typeof validate === "function") {
-        validate(payload);
-      }
-      return payload;
-    } catch (error) {
-      throw annotateApiError(error, { providerName, url });
-    } finally {
-      window.clearTimeout(timeout);
-      activeRequests.delete(controller);
-    }
-  }
-
-  async function withFallback(attempts, finalMessage) {
-    const generation = dataGeneration;
-    const errors = [];
-    for (const attempt of attempts) {
-      requireCurrentGeneration(generation);
-      try {
-        const result = await attempt();
-        requireCurrentGeneration(generation);
-        if (!errors.length) {
-          return result;
-        }
-
-        if (result && typeof result === "object" && !Array.isArray(result)) {
-          return {
-            ...result,
-            warnings: errors.map(toApiWarning),
-          };
-        }
-
-        return result;
-      } catch (error) {
-        requireCurrentGeneration(generation);
-        errors.push(annotateApiError(error));
-      }
-    }
-
-    const finalError = new Error(buildApiFailureMessage(finalMessage, errors));
-    finalError.isRateLimit = errors.some((error) => Boolean(error?.isRateLimit));
-    finalError.rateLimitWarnings = errors.filter((error) => error?.isRateLimit).map(toApiWarning);
-    throw finalError;
-  }
-
-  function createApiError(message, { status = null, providerName = "", url = "" } = {}) {
-    const error = new Error(message || "Unknown error");
-    error.status = Number.isFinite(status) ? status : null;
-    error.providerName = providerName || "";
-    error.url = url || "";
-    error.isRateLimit = Number(status) === 429;
-    return error;
-  }
-
-  function annotateApiError(error, { providerName = "", url = "" } = {}) {
-    if (error instanceof Error) {
-      if (providerName && !error.providerName) {
-        error.providerName = providerName;
-      }
-      if (url && !error.url) {
-        error.url = url;
-      }
-      if (!("status" in error)) {
-        error.status = null;
-      }
-      error.isRateLimit = Boolean(error.isRateLimit || Number(error.status) === 429);
-      return error;
-    }
-
-    return createApiError(typeof error === "string" ? error : "Unknown error", {
-      providerName,
-      url,
-    });
-  }
-
-  function toApiWarning(error) {
-    const annotated = annotateApiError(error);
-    return {
-      provider: getProviderDisplayName(annotated.providerName),
-      status: Number.isFinite(annotated.status) ? Number(annotated.status) : null,
-      isRateLimit: Boolean(annotated.isRateLimit),
-      message: annotated.message || "Unknown error",
-    };
-  }
-
-  function buildApiFailureMessage(finalMessage, errors) {
-    const normalizedWarnings = errors.map(toApiWarning);
-    if (normalizedWarnings.length && normalizedWarnings.every((warning) => warning.isRateLimit)) {
-      return `${finalMessage} Public APIs are rate limiting requests right now.`.trim();
-    }
-
-    const detail = normalizedWarnings
-      .map((warning) => formatApiWarningMessage(warning))
-      .filter(Boolean)
-      .join(" · ");
-    return `${finalMessage} ${detail}`.trim();
-  }
-
-  function formatApiWarningMessage(warning) {
-    if (!warning) {
-      return "";
-    }
-
-    const normalizedMessage =
-      warning.message && Number.isFinite(warning.status) && warning.message.startsWith(String(warning.status))
-        ? warning.message.slice(String(warning.status).length).trim()
-        : warning.message;
-
-    const parts = [];
-    if (warning.provider) {
-      parts.push(warning.provider);
-    }
-    if (Number.isFinite(warning.status)) {
-      parts.push(String(warning.status));
-    }
-    if (normalizedMessage) {
-      parts.push(normalizedMessage);
-    }
-    return parts.join(" ");
-  }
-
-  function getProviderDisplayName(providerName) {
-    if (providerName === "Mempool") {
-      return "mempool.space";
-    }
-    return providerName || "";
-  }
-
   async function copyPlainTextToClipboard(value) {
     const text = typeof value === "string" ? value : "";
     if (!text) {
@@ -7226,387 +5841,6 @@
   // Portfolio, activity, and chart math
   // ---------------------------------------------------------------------------
 
-  const PortfolioLayer = {
-    buildAddressSnapshot({
-      entry,
-      bundle,
-      provider,
-      currentPriceUsd,
-      priceHistory,
-      startTimestamp,
-      endTimestamp,
-      detailScope = "1Y",
-    }) {
-      const balanceSats =
-        Number(bundle.summary.chain_stats?.funded_txo_sum || 0) -
-        Number(bundle.summary.chain_stats?.spent_txo_sum || 0) +
-        Number(bundle.summary.mempool_stats?.funded_txo_sum || 0) -
-        Number(bundle.summary.mempool_stats?.spent_txo_sum || 0);
-
-      const txEvents = bundle.transactions
-        .map((tx) => normalizeTransactionEvent(tx, entry.address))
-        .filter((event) => event && (event.netSats !== 0 || event.sentSats !== 0 || event.receivedSats !== 0));
-
-      const balanceTimeline = buildDailyBalanceTimeline(
-        balanceSats,
-        txEvents,
-        startTimestamp,
-        endTimestamp
-      );
-
-      const hourlyBalanceTimeline = buildIntervalBalanceTimeline(
-        balanceSats,
-        txEvents,
-        endTimestamp - 23 * HOUR_MS,
-        endTimestamp,
-        HOUR_MS,
-        startOfUtcHour,
-        toHourKey
-      );
-
-      return {
-        entry,
-        provider,
-        balanceSats,
-        usdValue: (balanceSats / 1e8) * currentPriceUsd,
-        txEvents,
-        balanceTimeline,
-        hourlyBalanceTimeline,
-        approximate: bundle.truncated,
-        detailScope,
-      };
-    },
-
-    buildSummarySnapshot({
-      entry,
-      provider,
-      balanceSats,
-      currentPriceUsd,
-    }) {
-      return {
-        entry,
-        provider,
-        balanceSats: Number(balanceSats || 0),
-        usdValue: (Number(balanceSats || 0) / 1e8) * currentPriceUsd,
-        txEvents: [],
-        balanceTimeline: [],
-        hourlyBalanceTimeline: [],
-        approximate: false,
-        detailScope: "SUMMARY",
-      };
-    },
-
-    combineTimelines(snapshots, priceHistory, startTimestamp, endTimestamp) {
-      return combineSnapshotTimelines(
-        snapshots,
-        "balanceTimeline",
-        priceHistory,
-        startTimestamp,
-        endTimestamp
-      );
-    },
-
-    calculateTotals(snapshots) {
-      const balanceSats = snapshots.reduce((sum, snapshot) => sum + snapshot.balanceSats, 0);
-      const usdValue = snapshots.reduce((sum, snapshot) => sum + snapshot.usdValue, 0);
-      return { balanceSats, usdValue };
-    },
-  };
-
-  const ActivityLayer = {
-    buildCombinedActivity(snapshots, priceHistory, currentPriceUsd) {
-      const byTx = new Map();
-
-      snapshots.forEach((snapshot) => {
-        const label = shortAddress(snapshot.entry.address);
-
-        snapshot.txEvents.forEach((event) => {
-          if (!byTx.has(event.txid)) {
-            byTx.set(event.txid, {
-              txid: event.txid,
-              timestamp: event.timestamp,
-              confirmed: event.confirmed,
-              netSats: 0,
-              feeSats: Number.isFinite(event.feeSats) ? event.feeSats : null,
-              feeRateSatVb: Number.isFinite(event.feeRateSatVb) ? event.feeRateSatVb : null,
-              relatedAddresses: new Set(),
-              inputAddresses: new Set(),
-              outputAddresses: new Set(),
-              walletInputAddresses: new Set(),
-              walletOutputAddresses: new Set(),
-              hasAddressDetails: false,
-            });
-          }
-
-          const row = byTx.get(event.txid);
-          row.timestamp = Math.max(row.timestamp, event.timestamp);
-          row.netSats += event.netSats;
-          if (!Number.isFinite(row.feeSats) && Number.isFinite(event.feeSats)) {
-            row.feeSats = event.feeSats;
-          }
-          if (!Number.isFinite(row.feeRateSatVb) && Number.isFinite(event.feeRateSatVb)) {
-            row.feeRateSatVb = event.feeRateSatVb;
-          }
-          row.relatedAddresses.add(label);
-          if (event.inputAddresses.length || event.outputAddresses.length) {
-            row.hasAddressDetails = true;
-          }
-          event.inputAddresses.forEach((address) => row.inputAddresses.add(address));
-          event.outputAddresses.forEach((address) => row.outputAddresses.add(address));
-          event.walletInputAddresses.forEach((address) => row.walletInputAddresses.add(address));
-          event.walletOutputAddresses.forEach((address) => row.walletOutputAddresses.add(address));
-        });
-      });
-
-      return [...byTx.values()]
-        .map((row) => {
-          const price = priceHistory.get(toDateKey(row.timestamp)) || currentPriceUsd;
-          return {
-            txid: row.txid,
-            timestamp: row.timestamp,
-            confirmed: row.confirmed,
-            netSats: row.netSats,
-            feeSats: Number.isFinite(row.feeSats) ? row.feeSats : null,
-            feeRateSatVb: Number.isFinite(row.feeRateSatVb) ? row.feeRateSatVb : null,
-            direction: row.netSats > 0 ? "Received" : row.netSats < 0 ? "Sent" : "Internal",
-            usdValue: Number.isFinite(price) ? Math.abs(row.netSats / 1e8) * price : null,
-            relatedAddresses: [...row.relatedAddresses],
-            inputAddresses: [...row.inputAddresses],
-            outputAddresses: [...row.outputAddresses],
-            walletInputAddresses: [...row.walletInputAddresses],
-            walletOutputAddresses: [...row.walletOutputAddresses],
-            hasAddressDetails: Boolean(row.hasAddressDetails),
-          };
-        })
-        .sort((left, right) => right.timestamp - left.timestamp);
-    },
-  };
-
-  function extractTransactionAddresses(tx) {
-    const inputAddresses = [];
-    const outputAddresses = [];
-
-    (tx.vout || []).forEach((output) => {
-      if (looksLikeBitcoinAddress(output.scriptpubkey_address)) {
-        outputAddresses.push(output.scriptpubkey_address);
-      }
-    });
-
-    (tx.vin || []).forEach((input) => {
-      if (looksLikeBitcoinAddress(input.prevout?.scriptpubkey_address)) {
-        inputAddresses.push(input.prevout.scriptpubkey_address);
-      }
-    });
-
-    return {
-      inputAddresses: uniqueStrings(inputAddresses),
-      outputAddresses: uniqueStrings(outputAddresses),
-    };
-  }
-
-  function extractTransactionFeeRate(tx) {
-    const fee = Number(tx?.fee);
-    if (!Number.isFinite(fee) || fee < 0) {
-      return null;
-    }
-
-    const vsize = Number(tx?.vsize);
-    if (Number.isFinite(vsize) && vsize > 0) {
-      return fee / vsize;
-    }
-
-    const weight = Number(tx?.weight);
-    if (Number.isFinite(weight) && weight > 0) {
-      return fee / (weight / 4);
-    }
-
-    return null;
-  }
-
-  function normalizeTransactionEvent(tx, watchedAddress) {
-    let receivedSats = 0;
-    let sentSats = 0;
-    const { inputAddresses, outputAddresses } = extractTransactionAddresses(tx);
-    const feeSats = Number.isFinite(tx?.fee) ? Number(tx.fee) : null;
-    const feeRateSatVb = extractTransactionFeeRate(tx);
-
-    (tx.vout || []).forEach((output) => {
-      if (normalizeBitcoinAddress(output.scriptpubkey_address) === normalizeBitcoinAddress(watchedAddress)) {
-        receivedSats += Number(output.value || 0);
-      }
-    });
-
-    (tx.vin || []).forEach((input) => {
-      if (normalizeBitcoinAddress(input.prevout?.scriptpubkey_address) === normalizeBitcoinAddress(watchedAddress)) {
-        sentSats += Number(input.prevout.value || 0);
-      }
-    });
-
-    const netSats = receivedSats - sentSats;
-    const timestamp = tx.status?.block_time ? tx.status.block_time * 1000 : Date.now();
-
-    return {
-      txid: tx.txid,
-      timestamp,
-      confirmed: Boolean(tx.status?.confirmed),
-      receivedSats,
-      sentSats,
-      netSats,
-      feeSats,
-      feeRateSatVb,
-      inputAddresses,
-      outputAddresses,
-      walletInputAddresses: uniqueStrings(inputAddresses.filter((address) => address === watchedAddress)),
-      walletOutputAddresses: uniqueStrings(outputAddresses.filter((address) => address === watchedAddress)),
-    };
-  }
-
-  function buildTransactionTechnicalDetails(tx) {
-    const { inputAddresses, outputAddresses } = extractTransactionAddresses(tx);
-    return normalizeTransactionDetails({
-      txid: tx.txid,
-      feeSats: Number.isFinite(tx?.fee) ? Number(tx.fee) : null,
-      feeRateSatVb: extractTransactionFeeRate(tx),
-      inputAddresses,
-      outputAddresses,
-    });
-  }
-
-  function buildDailyBalanceTimeline(currentBalanceSats, txEvents, startTimestamp, endTimestamp) {
-    return buildIntervalBalanceTimeline(
-      currentBalanceSats,
-      txEvents,
-      startTimestamp,
-      endTimestamp,
-      DAY_MS,
-      startOfUtcDay,
-      toDateKey
-    );
-  }
-
-  function isSupportedTimelineRange(startTimestamp, endTimestamp, stepMs) {
-    return Number.isFinite(startTimestamp) && Number.isFinite(endTimestamp) &&
-      startTimestamp >= 0 && endTimestamp >= startTimestamp && endTimestamp <= Date.now() + DAY_MS &&
-      Number.isFinite(stepMs) && stepMs > 0 &&
-      Math.floor((endTimestamp - startTimestamp) / stepMs) + 1 <= MAX_TIMELINE_POINTS;
-  }
-
-  function buildIntervalBalanceTimeline(
-    currentBalanceSats,
-    txEvents,
-    startTimestamp,
-    endTimestamp,
-    stepMs,
-    alignTime,
-    keyForTimestamp
-  ) {
-    if (!isSupportedTimelineRange(startTimestamp, endTimestamp, stepMs)) return [];
-    const sortedDescending = [...txEvents].sort((a, b) => b.timestamp - a.timestamp);
-    const points = [];
-    let balance = currentBalanceSats;
-    let txIndex = 0;
-
-    for (let cursor = alignTime(endTimestamp); cursor >= alignTime(startTimestamp); cursor -= stepMs) {
-      const intervalEnd = cursor + stepMs - 1;
-      while (txIndex < sortedDescending.length && sortedDescending[txIndex].timestamp > intervalEnd) {
-        balance -= sortedDescending[txIndex].netSats;
-        txIndex += 1;
-      }
-
-      points.push({
-        dateKey: keyForTimestamp(cursor),
-        timestamp: cursor,
-        balanceSats: balance,
-      });
-    }
-
-    return points.reverse();
-  }
-
-  function combineSnapshotTimelines(
-    snapshots,
-    timelineKey,
-    priceHistory,
-    startTimestamp,
-    endTimestamp,
-    {
-      stepMs = DAY_MS,
-      alignTime = startOfUtcDay,
-      keyForTimestamp = toDateKey,
-    } = {}
-  ) {
-    if (!isSupportedTimelineRange(startTimestamp, endTimestamp, stepMs)) return [];
-    const sources = (Array.isArray(snapshots) ? snapshots : [])
-      .map((snapshot) => {
-        const points = Array.isArray(snapshot?.[timelineKey])
-          ? snapshot[timelineKey]
-              .filter(
-                (point) =>
-                  Number.isFinite(point?.timestamp) &&
-                  Number.isFinite(point?.balanceSats)
-              )
-              .sort((left, right) => left.timestamp - right.timestamp)
-          : [];
-        return {
-          points,
-          index: 0,
-          balanceSats: 0,
-        };
-      })
-      .filter((source) => source.points.length);
-    if (!sources.length) {
-      return [];
-    }
-
-    const timelineStart = alignTime(startTimestamp);
-    const safePriceHistory = priceHistory instanceof Map ? priceHistory : new Map();
-
-    const timeline = [];
-    for (let cursor = timelineStart; cursor <= endTimestamp; cursor += stepMs) {
-      const key = keyForTimestamp(cursor);
-      let balanceSats = 0;
-      sources.forEach((source) => {
-        while (
-          source.index < source.points.length &&
-          source.points[source.index].timestamp <= cursor
-        ) {
-          source.balanceSats = source.points[source.index].balanceSats;
-          source.index += 1;
-        }
-        balanceSats += source.balanceSats;
-      });
-      const btcHoldings = balanceSats / 1e8;
-      const usdPrice = safePriceHistory.get(key);
-      timeline.push({
-        dateKey: key,
-        timestamp: cursor,
-        balanceSats,
-        btcHoldings,
-        usdPrice,
-        usdValue: Number.isFinite(usdPrice) ? btcHoldings * usdPrice : null,
-      });
-    }
-
-    return timeline;
-  }
-
-  function buildFlatTimeline(balanceSats, currentPriceUsd, pointCount = HISTORY_DAYS, stepMs = DAY_MS, alignTime = startOfUtcDay) {
-    const timeline = [];
-    const start = alignTime(Date.now() - (pointCount - 1) * stepMs);
-    const usdValue = Number.isFinite(currentPriceUsd) ? (balanceSats / 1e8) * currentPriceUsd : null;
-    const keyForTimestamp = stepMs === HOUR_MS ? toHourKey : toDateKey;
-    for (let cursor = start; cursor <= Date.now(); cursor += stepMs) {
-      timeline.push({
-        timestamp: cursor,
-        dateKey: keyForTimestamp(cursor),
-        balanceSats,
-        btcHoldings: balanceSats / 1e8,
-        usdValue,
-      });
-    }
-    return timeline;
-  }
-
   function getWalletCardMiniChartScene({ walletId, addressCount, snapshots, balanceSats }) {
     if (!addressCount || !snapshots.length) {
       return null;
@@ -7669,495 +5903,6 @@
       width: 464,
       height: 152,
     });
-  }
-
-  function sampleSeriesPoints(points, maxPoints) {
-    const source = Array.isArray(points) ? points : [];
-    const limit = Math.max(2, Math.floor(Number(maxPoints) || 0));
-    if (source.length <= limit) {
-      return source;
-    }
-
-    const sampled = [];
-    const step = (source.length - 1) / (limit - 1);
-    for (let index = 0; index < limit; index += 1) {
-      sampled.push(source[Math.round(index * step)]);
-    }
-    return sampled;
-  }
-
-  function createWalletCardMiniChartScene({ key, values, width = 464, height = 152 }) {
-    const normalizedValues = fillSeriesGaps(values);
-    if (!normalizedValues.length) {
-      return null;
-    }
-
-    const tone = getSparklineTone(normalizedValues);
-    const palette = getSparklinePalette(tone);
-    const leftInset = 0;
-    const rightInset = 0;
-    const topInset = 6;
-    const plotBottom = height - 1;
-    const plotWidth = Math.max(1, width - leftInset - rightInset);
-    const plotHeight = Math.max(1, plotBottom - topInset);
-    const min = Math.min(...normalizedValues);
-    const max = Math.max(...normalizedValues);
-    const range = max - min;
-    const paddedMin = range === 0 ? min : min - range * 0.08;
-    const paddedMax = range === 0 ? max : max + range * 0.12;
-    const paddedRange = paddedMax - paddedMin;
-    const points = normalizedValues.map((value, index) => {
-      const x =
-        normalizedValues.length === 1
-          ? leftInset + plotWidth / 2
-          : leftInset + (index / (normalizedValues.length - 1)) * plotWidth;
-      const y =
-        paddedRange === 0
-          ? topInset + plotHeight * 0.72
-          : plotBottom - ((value - paddedMin) / paddedRange) * plotHeight;
-      return { x, y };
-    });
-
-    const safeKey = escapeHtml(String(key || "wallet-card-chart").replace(/[^a-z0-9-]/gi, "-"));
-    const linePath = buildSmoothPath(points);
-    const areaPath = `${linePath} L ${points.at(-1).x} ${plotBottom} L ${points[0].x} ${plotBottom} Z`;
-
-    return {
-      tone,
-      markup: `
-        <svg class="wallet-card-chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="presentation">
-          <defs>
-            <linearGradient id="wallet-card-line-${safeKey}" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stop-color="${palette.lineStart}"></stop>
-              <stop offset="100%" stop-color="${palette.lineEnd}"></stop>
-            </linearGradient>
-            <linearGradient id="wallet-card-fill-${safeKey}" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stop-color="${palette.fillStart}"></stop>
-              <stop offset="100%" stop-color="${palette.fillEnd}"></stop>
-            </linearGradient>
-          </defs>
-          <path d="${areaPath}" fill="url(#wallet-card-fill-${safeKey})"></path>
-          <path
-            d="${linePath}"
-            fill="none"
-            stroke="url(#wallet-card-line-${safeKey})"
-            stroke-width="2.25"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          ></path>
-        </svg>
-      `,
-    };
-  }
-
-  function createSparklineScene(chartDisplay, { width = 352, height = 96 } = {}) {
-    const values = Array.isArray(chartDisplay?.values) ? chartDisplay.values : [];
-    const key = typeof chartDisplay?.key === "string" ? chartDisplay.key : "sparkline";
-    const timestamps = Array.isArray(chartDisplay?.timestamps) ? chartDisplay.timestamps : [];
-    const rangeLabel =
-      typeof chartDisplay?.range === "string" ? chartDisplay.range : normalizeChartRange(state.selectedRange);
-    const normalizedValues = fillSeriesGaps(values);
-    if (!normalizedValues.length) {
-      return null;
-    }
-
-    const tone = getSparklineTone(normalizedValues);
-    const palette = getSparklinePalette(tone);
-
-    const leftInset = 0;
-    const rightInset = 0;
-    const topInset = 8;
-    const bottomInset = 36;
-    const plotWidth = Math.max(1, width - leftInset - rightInset);
-    const plotBottom = height - bottomInset;
-    const plotHeight = Math.max(1, plotBottom - topInset);
-    const min = Math.min(...normalizedValues);
-    const max = Math.max(...normalizedValues);
-    const range = max - min;
-    const points = normalizedValues.map((value, index) => {
-      const x =
-        normalizedValues.length === 1
-          ? leftInset + plotWidth / 2
-          : leftInset + (index / (normalizedValues.length - 1)) * plotWidth;
-      const y =
-        range === 0
-          ? topInset + plotHeight * 0.58
-          : plotBottom - ((value - min) / range) * plotHeight;
-      return { x, y };
-    });
-
-    const safeKey = escapeHtml(key.replace(/[^a-z0-9-]/gi, "-"));
-    const linePath = buildSmoothPath(points);
-    const areaPath = `${linePath} L ${points.at(-1).x} ${plotBottom} L ${points[0].x} ${plotBottom} Z`;
-    const yAxisLabels = buildSparklineYAxisLabels(min, max, topInset, plotBottom, range);
-    const xAxisLabels = buildSparklineXAxisLabels(timestamps, rangeLabel, leftInset, plotWidth, height);
-
-    return {
-      width,
-      height,
-      leftInset,
-      rightInset,
-      topInset,
-      plotBottom,
-      plotWidth,
-      rangeLabel,
-      points,
-      values: normalizedValues,
-      timestamps,
-      tone,
-      markup: `
-      <svg class="sparkline-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="presentation">
-        <defs>
-          <linearGradient id="line-${safeKey}" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="${palette.lineStart}"></stop>
-            <stop offset="100%" stop-color="${palette.lineEnd}"></stop>
-          </linearGradient>
-          <linearGradient id="fill-${safeKey}" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="${palette.fillStart}"></stop>
-            <stop offset="100%" stop-color="${palette.fillEnd}"></stop>
-          </linearGradient>
-        </defs>
-        <line class="sparkline-axis-line" x1="${leftInset}" y1="${plotBottom}" x2="${width - rightInset}" y2="${plotBottom}"></line>
-        ${yAxisLabels
-          .map(
-            (label) => `
-              <line class="sparkline-guide-line" x1="${leftInset}" y1="${label.y}" x2="${width - rightInset}" y2="${label.y}"></line>
-            `
-          )
-          .join("")}
-        <path d="${areaPath}" fill="url(#fill-${safeKey})"></path>
-        <path
-          d="${linePath}"
-          fill="none"
-          stroke="url(#line-${safeKey})"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        ></path>
-        ${xAxisLabels
-          .map(
-            (label) => `
-              <text class="sparkline-axis-label sparkline-axis-label--x" x="${label.x}" y="${height - 4}" text-anchor="${label.anchor}">${escapeHtml(
-                label.text
-              )}</text>
-            `
-          )
-          .join("")}
-      </svg>
-      <div class="sparkline-interaction" data-role="sparkline-interaction" hidden>
-        <div class="sparkline-hover-line" data-role="sparkline-hover-line"></div>
-        <div class="sparkline-hover-dot" data-role="sparkline-hover-dot"></div>
-        <div class="sparkline-tooltip" data-role="sparkline-tooltip">
-          <span class="sparkline-tooltip-value" data-role="sparkline-tooltip-value"></span>
-          <span class="sparkline-tooltip-time" data-role="sparkline-tooltip-time"></span>
-        </div>
-      </div>
-    `,
-    };
-  }
-
-  function bindSparklineInteraction(container, scene) {
-    container.onpointerenter = null;
-    container.onpointermove = null;
-    container.onpointerleave = null;
-    container.onpointerdown = null;
-    container.onblur = null;
-    container._sparklineScene = scene || null;
-
-    if (!scene) {
-      return;
-    }
-
-    const interaction = container.querySelector("[data-role='sparkline-interaction']");
-    const guideLine = container.querySelector("[data-role='sparkline-hover-line']");
-    const dot = container.querySelector("[data-role='sparkline-hover-dot']");
-    const tooltip = container.querySelector("[data-role='sparkline-tooltip']");
-    const tooltipValue = container.querySelector("[data-role='sparkline-tooltip-value']");
-    const tooltipTime = container.querySelector("[data-role='sparkline-tooltip-time']");
-    if (!interaction || !guideLine || !dot || !tooltip || !tooltipValue || !tooltipTime) {
-      return;
-    }
-
-    const hideInteraction = () => {
-      interaction.hidden = true;
-    };
-
-    const updateInteraction = (clientX) => {
-      const rect = container.getBoundingClientRect();
-      if (!rect.width || !rect.height) {
-        hideInteraction();
-        return;
-      }
-
-      const plotLeftPx = (scene.leftInset / scene.width) * rect.width;
-      const plotWidthPx = (scene.plotWidth / scene.width) * rect.width;
-      const localX = clamp(clientX - rect.left, plotLeftPx, plotLeftPx + plotWidthPx);
-      const pointIndex =
-        scene.points.length === 1
-          ? 0
-          : clamp(
-              Math.round(((localX - plotLeftPx) / plotWidthPx) * (scene.points.length - 1)),
-              0,
-              scene.points.length - 1
-            );
-      const point = scene.points[pointIndex];
-      const pointX = (point.x / scene.width) * rect.width;
-      const pointY = (point.y / scene.height) * rect.height;
-      const lineTop = (scene.topInset / scene.height) * rect.height;
-      const lineBottom = (scene.plotBottom / scene.height) * rect.height;
-
-      tooltipValue.textContent = formatSparklineTooltipValue(scene.values[pointIndex]);
-      tooltipTime.textContent = formatSparklineTooltipTimestamp(
-        scene.timestamps[pointIndex],
-        scene.rangeLabel
-      );
-
-      interaction.hidden = false;
-      guideLine.style.left = `${pointX}px`;
-      guideLine.style.top = `${lineTop}px`;
-      guideLine.style.height = `${Math.max(0, lineBottom - lineTop)}px`;
-      dot.style.left = `${pointX}px`;
-      dot.style.top = `${pointY}px`;
-
-      const tooltipWidth = tooltip.offsetWidth || 140;
-      const tooltipHeight = tooltip.offsetHeight || 48;
-      const clampedTooltipX = clamp(pointX, tooltipWidth / 2 + 8, rect.width - tooltipWidth / 2 - 8);
-      const tooltipY = Math.max(8, pointY - tooltipHeight - 18);
-      tooltip.style.left = `${clampedTooltipX}px`;
-      tooltip.style.top = `${tooltipY}px`;
-    };
-
-    container.onpointerenter = (event) => {
-      updateInteraction(event.clientX);
-    };
-    container.onpointermove = (event) => {
-      updateInteraction(event.clientX);
-    };
-    container.onpointerdown = (event) => {
-      updateInteraction(event.clientX);
-    };
-    container.onpointerleave = hideInteraction;
-    container.onblur = hideInteraction;
-  }
-
-  function getSparklineTone(values) {
-    const normalizedValues = fillSeriesGaps(values);
-    if (!normalizedValues.length) {
-      return "up";
-    }
-
-    return normalizedValues.at(-1) < normalizedValues[0] ? "down" : "up";
-  }
-
-  function getSparklinePalette(tone) {
-    if (tone === "down") {
-      return {
-        lineStart: "rgba(255, 68, 0, 0.92)",
-        lineEnd: "rgba(255, 68, 0, 0.35)",
-        fillStart: "rgba(255, 68, 0, 0.32)",
-        fillEnd: "rgba(255, 68, 0, 0)",
-      };
-    }
-
-    return {
-      lineStart: "rgba(125, 229, 147, 0.92)",
-      lineEnd: "rgba(125, 229, 147, 0.35)",
-      fillStart: "rgba(125, 229, 147, 0.38)",
-      fillEnd: "rgba(125, 229, 147, 0)",
-    };
-  }
-
-  function buildSparklineYAxisLabels(min, max, topY, bottomY, range) {
-    if (!Number.isFinite(min) || !Number.isFinite(max)) {
-      return [];
-    }
-
-    if (range === 0) {
-      return [
-        {
-          y: topY + (bottomY - topY) * 0.58,
-        },
-      ];
-    }
-
-    const stops = [0.75, 0.5, 0.25];
-    return stops.map((stop) => ({
-      y: topY + (bottomY - topY) * (1 - stop),
-    }));
-  }
-
-  function buildSparklineXAxisLabels(timestamps, rangeLabel, leftInset, plotWidth, height) {
-    if (!timestamps.length) {
-      return [];
-    }
-
-    const indexes = uniqueNumbers(
-      [0, 0.25, 0.5, 0.75, 1].map((ratio) =>
-        Math.max(0, Math.round((timestamps.length - 1) * ratio))
-      )
-    );
-
-    return indexes.map((index, labelIndex) => {
-      const ratio = timestamps.length === 1 ? 0.5 : index / (timestamps.length - 1);
-      return {
-        x: leftInset + ratio * plotWidth,
-        anchor: labelIndex === 0 ? "start" : labelIndex === indexes.length - 1 ? "end" : "middle",
-        text: formatChartXAxisLabel(timestamps[index], rangeLabel),
-      };
-    });
-  }
-
-  function formatChartXAxisLabel(timestamp, rangeLabel) {
-    const date = new Date(timestamp);
-    if (rangeLabel === "1D") {
-      return new Intl.DateTimeFormat("en-GB", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      }).format(date);
-    }
-
-    if (rangeLabel === "30D") {
-      return new Intl.DateTimeFormat("en-US", {
-        month: "short",
-        day: "numeric",
-      }).format(date);
-    }
-
-    return new Intl.DateTimeFormat("en-US", {
-      month: "short",
-      year: "numeric",
-    }).format(date);
-  }
-
-  function formatSparklineTooltipValue(value) {
-    if (getDisplayUnit() === "USD") {
-      return formatDisplayFiatValue(value, state.hideBalances);
-    }
-
-    return formatWalletBtc(value, state.hideBalances);
-  }
-
-  function formatSparklineTooltipTimestamp(timestamp, rangeLabel) {
-    if (!Number.isFinite(timestamp)) {
-      return "";
-    }
-
-    const date = new Date(timestamp);
-    if (rangeLabel === "1D") {
-      return new Intl.DateTimeFormat("en-US", {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      }).format(date);
-    }
-
-    return new Intl.DateTimeFormat("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    }).format(date);
-  }
-
-  function clamp(value, min, max) {
-    return Math.min(Math.max(value, min), max);
-  }
-
-  function uniqueNumbers(values) {
-    return [...new Set(values.filter((value) => Number.isFinite(value)))];
-  }
-
-  function buildSmoothPath(points) {
-    if (!points.length) {
-      return "";
-    }
-
-    if (points.length === 1) {
-      return `M ${points[0].x} ${points[0].y}`;
-    }
-
-    let path = `M ${points[0].x} ${points[0].y}`;
-    for (let index = 0; index < points.length - 1; index += 1) {
-      const current = points[index];
-      const next = points[index + 1];
-      const controlX = (current.x + next.x) / 2;
-      path += ` C ${controlX} ${current.y}, ${controlX} ${next.y}, ${next.x} ${next.y}`;
-    }
-    return path;
-  }
-
-  function fillSeriesGaps(values) {
-    const source = Array.isArray(values) ? values : [];
-    const result = [];
-    let lastKnown = null;
-
-    source.forEach((value) => {
-      if (Number.isFinite(value)) {
-        lastKnown = Number(value);
-        result.push(Number(value));
-      } else if (lastKnown !== null) {
-        result.push(lastKnown);
-      } else {
-        result.push(0);
-      }
-    });
-
-    return result.filter((value) => Number.isFinite(value));
-  }
-
-  function getSeriesGrowthDescriptor(values) {
-    const series = Array.isArray(values) ? values.filter((value) => Number.isFinite(value)) : [];
-    if (!series.length) {
-      return null;
-    }
-
-    const first = Number(series[0]);
-    const last = Number(series.at(-1));
-    if (!Number.isFinite(first) || !Number.isFinite(last)) {
-      return null;
-    }
-
-    if (state.hideBalances) {
-      return null;
-    }
-
-    let percent = null;
-    if (first === 0) {
-      percent = last === 0 ? 0 : null;
-    } else {
-      percent = ((last - first) / Math.abs(first)) * 100;
-    }
-
-    if (!Number.isFinite(percent)) {
-      return null;
-    }
-
-    const normalizedPercent = normalizeDisplayedGrowthPercent(percent);
-    const sign = normalizedPercent > 0 ? "+" : "";
-    const maximumFractionDigits = Math.abs(normalizedPercent) >= 100 ? 0 : 2;
-
-    return {
-      label: `${sign}${formatCompactDecimal(normalizedPercent, maximumFractionDigits)}%`,
-      chartLabel: `${normalizedPercent >= 0 ? "+" : ""}${formatCompactDecimal(
-        normalizedPercent,
-        maximumFractionDigits
-      )}%`,
-      compactTitle: Math.abs(normalizedPercent) >= 1000,
-      toneClass:
-        normalizedPercent < 0
-          ? "is-negative"
-          : normalizedPercent > 0
-            ? "is-confirmed"
-            : "",
-      icon:
-        normalizedPercent === 0
-          ? getChartLineFlatIconMarkup()
-          : normalizedPercent < 0
-            ? getChartLineDownIconMarkup()
-            : getChartLineUpIconMarkup(),
-    };
   }
 
   function getTransactionIcon(direction) {
@@ -8764,8 +6509,14 @@
     return getTransactionAmountDisplay(item).primary;
   }
 
+  function isEstimatedHistoricalFiat(item) {
+    return getFiatCurrency() !== "USD" && Number.isFinite(item?.usdValue) &&
+      !Number.isFinite(getHistoricalDisplayFiatUnitPrice(item?.timestamp));
+  }
+
   function getTransactionValueMetrics(item) {
     const valueThen = getTransactionThenDisplayFiatValue(item);
+    const estimate = isEstimatedHistoricalFiat(item) && !state.hideBalances ? "≈ " : "";
     const valueNow = getTransactionCurrentDisplayFiatValue(item);
     const rawGrowthPercent =
       Number.isFinite(valueThen) && valueThen > 0 && Number.isFinite(valueNow)
@@ -8774,9 +6525,9 @@
     const growthPercent = normalizeDisplayedGrowthPercent(rawGrowthPercent);
 
     return {
-      thenLabel: formatDisplayFiatMetricValue(valueThen, state.hideBalances),
+      thenLabel: estimate + formatDisplayFiatMetricValue(valueThen, state.hideBalances),
       nowLabel: formatDisplayFiatMetricValue(valueNow, state.hideBalances),
-      growthLabel: formatTransactionGrowth(growthPercent),
+      growthLabel: (Number.isFinite(growthPercent) ? estimate : "") + formatTransactionGrowth(growthPercent),
       growthIcon:
         Number.isFinite(growthPercent) && growthPercent === 0
           ? getChartLineFlatIconMarkup()
@@ -8841,7 +6592,11 @@
       points = walletView.dailyTimeline;
     }
 
+    if (range === "1D" ? !walletView.hasReliableIntradayTimeline : !walletView.hasReliableDailyTimeline) points = [];
+
     return {
+      incompleteHistory: Boolean(walletView.hasApproximateChartData),
+      estimatedFiat: getFiatCurrency() !== "USD" && points.some((point) => Number.isFinite(point.usdValue) && !Number.isFinite(getHistoricalDisplayFiatUnitPrice(point.timestamp, { preferIntraday: range === "1D" }))),
       symbol: getDisplayUnit() === "USD" ? getFiatDisplayPrefix() : getBitcoinDisplayPrefix(),
       range,
       timestamps: points.map((point) => point.timestamp),
@@ -9105,14 +6860,15 @@
     }
 
     return {
+      priceStale: Boolean(candidate.priceStale),
       historyScope: normalizeHistoryScope(candidate.historyScope),
       currentPriceUsd: Number.isFinite(candidate.currentPriceUsd)
         ? candidate.currentPriceUsd
         : fallbackPriceUsd,
       fiatExchangeRates: normalizeFiatExchangeRates(candidate.fiatExchangeRates),
-      priceHistory: deserializeNumberMap(candidate.priceHistory),
-      intradayPriceHistory: deserializeNumberMap(candidate.intradayPriceHistory),
-      historyAvailable: candidate.historyAvailable !== false,
+      priceHistory: candidate.priceHistoryVersion === 1 ? deserializeNumberMap(candidate.priceHistory) : new Map(),
+      intradayPriceHistory: candidate.priceHistoryVersion === 1 ? deserializeNumberMap(candidate.intradayPriceHistory) : new Map(),
+      historyAvailable: candidate.priceHistoryVersion === 1 && candidate.historyAvailable !== false,
       historyMissingDays: Number.isFinite(candidate.historyMissingDays) ? candidate.historyMissingDays : 0,
       approximationMode: Boolean(candidate.approximationMode),
       timelineStart: isTimestamp(candidate.timelineStart) ? candidate.timelineStart : null,
@@ -9285,7 +7041,7 @@
       return convertUsdValueToFiat(fallbackUsd);
     }
 
-    return Number.isFinite(currentPrice) ? btcHoldings * currentPrice : null;
+    return preferCurrentPrice && Number.isFinite(currentPrice) ? btcHoldings * currentPrice : null;
   }
 
   function getPointDisplayFiatValue(point, { preferIntraday = false } = {}) {

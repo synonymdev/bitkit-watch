@@ -2,6 +2,8 @@
 
 import { writeFile } from "node:fs/promises";
 import validation from "../assets/api-validation.js";
+import history from "../assets/market-history.js";
+const { summarizePriceHistory } = history;
 const { validateAddressSummary, validateTransactionList, validateCandles, readJsonResponse } = validation;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -59,6 +61,7 @@ const balancesByAddress = Object.fromEntries(
   addressSnapshots.map((snapshot) => [snapshot.address, snapshot.balanceSats])
 );
 const runtimeCache = {
+  priceHistoryVersion: 1,
   historyScope: "ALL",
   currentPriceUsd,
   fiatExchangeRates: [...fiatExchangeRates.entries()],
@@ -214,8 +217,7 @@ async function fetchDailyPriceHistory(startTimestamp, endTimestamp) {
     });
   }
 
-  fillPriceHistory(prices, startTimestamp, endTimestamp, DAY_MS, startOfUtcDay, toDateKey);
-  return prices;
+  return summarizePriceHistory(prices, startTimestamp, endTimestamp).series;
 }
 
 async function fetchIntradayPriceHistory(startTimestamp, endTimestamp, fallbackPrice) {
@@ -225,7 +227,6 @@ async function fetchIntradayPriceHistory(startTimestamp, endTimestamp, fallbackP
     prices.set(toHourKey(candle[0] * 1000), Number(candle[4]));
   });
 
-  fillPriceHistory(prices, startTimestamp, endTimestamp, HOUR_MS, startOfUtcHour, toHourKey, fallbackPrice);
   return prices;
 }
 
@@ -322,7 +323,7 @@ function getOldestTransactionTimestamp(bundles) {
 function buildCandleRequests(startTimestamp, endTimestamp, maxDaysPerRequest) {
   const requests = [];
   let cursor = startOfUtcDay(startTimestamp);
-  while (cursor < endTimestamp) {
+  while (cursor <= endTimestamp) {
     const chunkEnd = Math.min(cursor + (maxDaysPerRequest - 1) * DAY_MS, endTimestamp);
     requests.push({ start: cursor, end: chunkEnd });
     cursor = chunkEnd + DAY_MS;
@@ -344,26 +345,6 @@ async function mapWithConcurrency(items, maxConcurrent, worker) {
   }
   await Promise.all(Array.from({ length: workerCount }, runWorker));
   return results;
-}
-
-function fillPriceHistory(prices, startTimestamp, endTimestamp, stepMs, alignTime, keyForTimestamp, fallbackPrice = null) {
-  const firstKnown = [...prices.entries()]
-    .sort((left, right) => left[0].localeCompare(right[0]))
-    .map(([, price]) => price)
-    .find(Number.isFinite);
-  let lastKnown = null;
-  for (let cursor = alignTime(startTimestamp); cursor <= endTimestamp; cursor += stepMs) {
-    const key = keyForTimestamp(cursor);
-    if (prices.has(key)) {
-      lastKnown = prices.get(key);
-    } else if (Number.isFinite(lastKnown)) {
-      prices.set(key, lastKnown);
-    } else if (Number.isFinite(firstKnown)) {
-      prices.set(key, firstKnown);
-    } else if (Number.isFinite(fallbackPrice)) {
-      prices.set(key, fallbackPrice);
-    }
-  }
 }
 
 function countMissingDays(prices, startTimestamp, endTimestamp) {

@@ -3,13 +3,15 @@ name: Deploy
 on:
   push:
     branches: [master]
+  pull_request:
+    branches: [master]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: deploy
+  group: ${{ github.event_name == 'pull_request' && format('checks-{0}', github.event.pull_request.number) || 'deploy' }}
   cancel-in-progress: false
 
 env:
@@ -19,7 +21,29 @@ env:
   SERVICE: bitkit-watch
 
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium webkit
+      # PR checks remain useful after the demo ages. Deployments require a fresh snapshot.
+      - if: github.event_name == 'pull_request'
+        run: npm run verify -- --allow-stale-snapshot
+      - if: github.event_name != 'pull_request'
+        run: npm run verify
+      - run: npm run test:browser
+
   deploy:
+    needs: checks
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
