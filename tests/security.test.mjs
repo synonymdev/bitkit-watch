@@ -12,7 +12,7 @@ const TIMESTAMP = 1_700_000_000_000;
 const source = readFileSync(new URL("../app.js", import.meta.url), "utf8");
 const snapshotSource = readFileSync(new URL("../assets/satoshi-demo-snapshot.js", import.meta.url), "utf8");
 
-function harness({ stored = {}, fetch: fetchImpl = async () => { throw new Error("Unexpected network request"); }, crypto = webcrypto } = {}) {
+function harness({ stored = {}, fetch: fetchImpl = async () => { throw new Error("Unexpected network request"); }, crypto = webcrypto, demo = false } = {}) {
   const storage = new Map(Object.entries(stored));
   const context = vm.createContext({
     BITKIT_WATCH_API_VALIDATION: validation, crypto, Blob, TextDecoder, AbortController, DOMException,
@@ -29,6 +29,7 @@ function harness({ stored = {}, fetch: fetchImpl = async () => { throw new Error
   for (const name of ["market-history", "storage", "api", "portfolio", "charts"]) {
     vm.runInContext(readFileSync(new URL(`../assets/${name}.js`, import.meta.url), "utf8"), context);
   }
+  if (demo) vm.runInContext(snapshotSource, context);
   // Test-only exports: production stays encapsulated and has no diagnostic API.
   vm.runInContext(source.replace(/\}\)\(\);\s*$/, `
     globalThis.app = {
@@ -42,6 +43,8 @@ function harness({ stored = {}, fetch: fetchImpl = async () => { throw new Error
       clearVault, removeAddress, removeWallet, cancelPendingDataWork, handleStorageChange,
       parseAddressInput, buildWalletCard, buildAddressTagChips, escapeHtml,
       mergeAddressTransactionEvents, upsertAddressSnapshot, serializeRuntimeCache, combineSnapshotTimelines,
+      hydrateBakedDemoRuntimeIfNeeded, hydrateRuntimeFromCache, updateBundledSatoshiDemoCache,
+      getWalletView, getAddressView, getWalletSummaries, getCommonReliableDailyCoverage,
       get state() { return state; }, get runtime() { return runtime; },
       setState(value) { state = value; },
       setRuntime(value) { runtime = { ...createRuntimeState(), ...value }; },
@@ -513,4 +516,102 @@ test("provider failure details stay in the error cause instead of repeating in t
     assert.ok(!error.message.includes(" · "));
     return true;
   });
+});
+
+test("wallet, address and homepage charts keep their history when another refresh changes shared bounds", () => {
+  const { app } = harness({ demo: true });
+  app.hydrateBakedDemoRuntimeIfNeeded();
+  const entry = app.state.addresses.find((entry) => entry.address === GENESIS);
+  const walletBefore = app.getWalletView(entry.groupId);
+  const addressBefore = app.getAddressView(entry.id);
+  const cardBefore = app.getWalletSummaries().find((item) => item.wallet.id === entry.groupId).miniChartMarkup;
+  app.runtime.timelineStart = Date.now() - 86400000;
+  app.runtime.timelineEnd = Date.now();
+  app.runtime.intradayStart = Date.now() - 3600000;
+  app.runtime.intradayEnd = Date.now();
+  assert.deepEqual(app.getWalletView(entry.groupId).dailyTimeline, walletBefore.dailyTimeline);
+  assert.deepEqual(app.getAddressView(entry.id).dailyTimeline, addressBefore.dailyTimeline);
+  assert.deepEqual(app.getWalletView(entry.groupId).intradayTimeline, walletBefore.intradayTimeline);
+  assert.equal(app.getWalletSummaries().find((item) => item.wallet.id === entry.groupId).miniChartMarkup, cardBefore);
+});
+
+test("loading a shortened ALL cache restores daily history without changing wallets, balances or transactions", () => {
+  const { app } = harness({ demo: true });
+  app.hydrateBakedDemoRuntimeIfNeeded();
+  const entry = app.state.addresses.find((entry) => entry.address === GENESIS);
+  const stateBefore = JSON.stringify(app.state);
+  const dataBefore = JSON.stringify(app.runtime.addressSnapshots.map(({ entry, balanceSats, txEvents, refreshedAt }) => ({ entry, balanceSats, txEvents, refreshedAt })));
+  const cache = app.serializeRuntimeCache(app.runtime);
+  cache.timelineStart = null; // Legacy bounds or bounds from a different wallet.
+  cache.addressSnapshots.forEach((snapshot) => { snapshot.balanceTimeline = snapshot.balanceTimeline.slice(-2); });
+  const recovered = app.normalizeRuntimeCache(cache, app.state);
+  assert.equal(recovered.rebuiltTimelines, true);
+  app.setRuntime(recovered);
+  assert.ok(app.getWalletView(entry.groupId).availableChartRanges.includes("30D"));
+  assert.ok(app.getWalletView(entry.groupId).dailyTimeline.length >= 30);
+  assert.equal(JSON.stringify(app.state), stateBefore);
+  assert.equal(JSON.stringify(app.runtime.addressSnapshots.map(({ entry, balanceSats, txEvents, refreshedAt }) => ({ entry, balanceSats, txEvents, refreshedAt }))), dataBefore);
+  assert.equal(app.normalizeRuntimeCache(app.serializeRuntimeCache(app.runtime), app.state).rebuiltTimelines, false);
+});
+
+test("incremental Satoshi refresh preserves full cached history after a narrow wallet refresh", async () => {
+  const { app } = harness({ demo: true });
+  app.hydrateBakedDemoRuntimeIfNeeded();
+  const entry = app.state.addresses.find((entry) => entry.address === GENESIS);
+  const initial = app.runtime.addressSnapshots.map((snapshot) => [snapshot.entry.id, snapshot.balanceTimeline[0].timestamp]);
+  const balances = new Map(app.runtime.addressSnapshots.map((snapshot) => [snapshot.entry.address, snapshot.balanceSats]));
+  app.disableRendering();
+  app.runtime.timelineStart = Date.now() - 86400000;
+  app.APILayer.fetchAddressDelta = async (address) => ({ provider: "Test", bundle: {
+    summary: { chain_stats: { funded_txo_sum: balances.get(address), spent_txo_sum: 0 }, mempool_stats: {} },
+    transactions: [], truncated: false, overlapFound: true,
+  } });
+  app.APILayer.fetchMarketData = async () => ({ ...app.runtime });
+  await app.updateBundledSatoshiDemoCache(entry.groupId);
+  for (const [id, start] of initial) {
+    assert.equal(app.runtime.addressSnapshots.find((snapshot) => snapshot.entry.id === id).balanceTimeline[0].timestamp, start);
+  }
+  assert.ok(app.getWalletView(entry.groupId).availableChartRanges.includes("30D"));
+});
+
+test("a wallet needs daily coverage for every address before offering a shared history range", () => {
+  const { app } = harness({ demo: true });
+  app.hydrateBakedDemoRuntimeIfNeeded();
+  app.runtime.addressSnapshots[0].balanceTimeline = [];
+  assert.equal(app.getCommonReliableDailyCoverage(app.runtime.addressSnapshots), null);
+});
+
+test("bundled demo repairs truncated public history while preserving personal wallets and healthy newer caches", () => {
+  const { app } = harness({ demo: true });
+  app.hydrateBakedDemoRuntimeIfNeeded();
+  const genesis = app.runtime.addressSnapshots.find((snapshot) => snapshot.entry.address === GENESIS);
+  genesis.balanceSats += 100;
+  genesis.refreshedAt = Date.now();
+  assert.equal(app.hydrateBakedDemoRuntimeIfNeeded(), false);
+  assert.equal(app.runtime.addressSnapshots.find((snapshot) => snapshot.entry.address === GENESIS), genesis);
+  const privateEntry = { id: "personal", address: SEGWIT, groupId: app.state.groups[0].id, tags: ["keep"] };
+  app.state.addresses.push(privateEntry);
+  app.state.lastUpdated = new Date().toISOString();
+  app.state.groups[0].name = "Personal savings";
+  const personal = { ...genesis, entry: privateEntry, balanceSats: 777 };
+  app.runtime.addressSnapshots.push(personal);
+  const stateBefore = JSON.stringify(app.state);
+  genesis.txEvents = genesis.txEvents.slice(0, 3);
+  genesis.balanceTimeline = genesis.balanceTimeline.slice(-2);
+  genesis.approximate = true;
+  assert.equal(app.hydrateBakedDemoRuntimeIfNeeded(), true);
+  assert.ok(app.getWalletView(genesis.entry.groupId).availableChartRanges.includes("30D"));
+  assert.equal(JSON.stringify(app.state), stateBefore);
+  assert.equal(app.runtime.addressSnapshots.find((snapshot) => snapshot.entry.id === "personal"), personal);
+  assert.equal(app.hydrateBakedDemoRuntimeIfNeeded(), false);
+});
+
+test("demo recovery never recreates a removed demo address", () => {
+  const { app } = harness({ demo: true });
+  app.hydrateBakedDemoRuntimeIfNeeded();
+  app.state.addresses = app.state.addresses.filter((entry) => entry.address !== GENESIS);
+  app.runtime.addressSnapshots = [];
+  assert.equal(app.hydrateBakedDemoRuntimeIfNeeded(), false);
+  assert.equal(app.runtime.addressSnapshots.length, 0);
+  assert.equal(app.state.addresses.length, 4);
 });
