@@ -2856,14 +2856,14 @@ body.is-watch-view .watch-view-demo-wallet {
   pointer-events: auto;
 }
 
-.app-footer-copy span {
+.app-footer-copy > span {
   display: block;
   color: rgba(255, 255, 255, 0.32);
   font-size: 11px;
   line-height: 14.3px;
 }
 
-.app-footer-copy span + span {
+.app-footer-copy > span + span {
   margin-top: 2px;
 }
 
@@ -3611,11 +3611,11 @@ body.is-watch-view .watch-view-demo-wallet {
     max-width: none;
   }
 
-  .app-footer-copy span {
+  .app-footer-copy > span {
     display: inline;
   }
 
-  .app-footer-copy span + span {
+  .app-footer-copy > span + span {
     margin-top: 0;
   }
 
@@ -3731,3 +3731,12 @@ body.is-watch-view .watch-view-demo-wallet {
 
   
 }
+
+/* Historical price coverage and conversion estimates. */
+.data-status {
+  color: var(--text-secondary, #a5a5a5);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.data-status { margin: 8px 0 0; }
+.data-status:empty { display: none; }

@@ -16,7 +16,7 @@ function harness({ stored = {}, fetch: fetchImpl = async () => { throw new Error
   const storage = new Map(Object.entries(stored));
   const context = vm.createContext({
     BITKIT_WATCH_API_VALIDATION: validation, crypto, Blob, TextDecoder, AbortController, DOMException,
-    Map, Set, Date, Promise, console,
+    Map, Set, Date, Promise, console, URL,
     localStorage: {
       getItem: (key) => storage.get(key) ?? null,
       setItem: (key, value) => storage.set(key, value),
@@ -26,6 +26,9 @@ function harness({ stored = {}, fetch: fetchImpl = async () => { throw new Error
     window: { setTimeout, clearTimeout, confirm: () => true },
     fetch: fetchImpl,
   });
+  for (const name of ["market-history", "storage", "api", "portfolio", "charts"]) {
+    vm.runInContext(readFileSync(new URL(`../assets/${name}.js`, import.meta.url), "utf8"), context);
+  }
   // Test-only exports: production stays encapsulated and has no diagnostic API.
   vm.runInContext(source.replace(/\}\)\(\);\s*$/, `
     globalThis.app = {
@@ -33,6 +36,8 @@ function harness({ stored = {}, fetch: fetchImpl = async () => { throw new Error
       normalizeRuntimeCache, normalizeCachedTxEvents, normalizeCachedBalanceTimeline,
       buildDailyBalanceTimeline, buildRuntimeCacheCandidates, classifyAddressBatchDuplicates,
       fetchJson, withFallback, allSettledWithConcurrency, refreshScopedEntries,
+      getRetryAt, PortfolioLayer, getSeriesGrowthDescriptor, createSparklineScene,
+      getDisplayFiatValueFromBtc, fetchProductHistoricalPriceSeries, fetchMarketDataWithCache,
       refreshVault, hydrateAddressAfterAdd, hydrateAddressDetail, loadTransactionTechnicalDetailsIfNeeded,
       clearVault, removeAddress, removeWallet, cancelPendingDataWork, handleStorageChange,
       parseAddressInput, buildWalletCard, buildAddressTagChips, escapeHtml,
@@ -346,4 +351,166 @@ test("all-time hydration starts market requests at known activity instead of 197
   app.APILayer.fetchMarketData = async (start) => { requestedStart = start; throw new Error("market-stop"); };
   await assert.rejects(app.hydrateAddressDetail(app.state.addresses[0], "ALL"), /market-stop/);
   assert.equal(requestedStart, Date.UTC(2023, 10, 14));
+});
+
+test("missing historical prices stay unknown and growth never uses a future spot price", async () => {
+  const day = 86_400_000;
+  const start = Date.UTC(2020, 0, 1);
+  const { app } = harness({ fetch: async () => Response.json([[ (start + 2 * day) / 1000, 6000, 8000, 7000, 7000, 1 ]]) });
+  const result = await app.fetchProductHistoricalPriceSeries("BTC-USD", start, start + 4 * day);
+  assert.equal(result.missingDays, 4);
+  assert.equal(result.series.size, 1);
+  assert.equal(result.series.get("2020-01-03"), 7000);
+  assert.equal(result.series.has("2020-01-01"), false);
+  app.setRuntime({ currentPriceUsd: 100_000 });
+  assert.equal(app.getDisplayFiatValueFromBtc(1, { timestamp: start }), null);
+  assert.equal(app.getSeriesGrowthDescriptor([null, 100, 200]), null);
+  assert.equal(app.getSeriesGrowthDescriptor([100, null, 200]), null);
+  const scene = app.createSparklineScene({ values: [null, 100, null, 200], timestamps: [1, 2, 3, 4], range: "ALL" });
+  assert.equal(scene.points.length, 4);
+  assert.equal(scene.points[0], null);
+  assert.equal(scene.points[2], null);
+  assert.equal(scene.values[0], null);
+  assert.equal(scene.timestamps[3], 4);
+  assert.ok(!scene.markup.includes("NaN"));
+});
+
+test("an empty price response reports the requested missing days, including single-day ranges", async () => {
+  const { app } = harness({ fetch: async () => Response.json([]) });
+  const start = Date.UTC(2020, 0, 1);
+  assert.equal((await app.fetchProductHistoricalPriceSeries("BTC-USD", start, start)).missingDays, 1);
+  assert.equal((await app.fetchProductHistoricalPriceSeries("BTC-USD", start, start + 4 * 86_400_000)).missingDays, 5);
+});
+
+test("legacy synthesized prices are invalidated without losing address balances or transactions", () => {
+  const { app } = harness();
+  const state = watchedState(app);
+  const entry = state.addresses[0];
+  const snapshot = app.PortfolioLayer.buildAddressSnapshot({ entry, provider: "test", bundle: { summary: summary(SEGWIT), transactions: [transaction()], truncated: false }, currentPriceUsd: 100, startTimestamp: TIMESTAMP, endTimestamp: Date.now() });
+  const cache = app.serializeRuntimeCache({ ...app.runtime, priceHistory: new Map([["2020-01-01", 7000]]), addressSnapshots: [snapshot] });
+  delete cache.priceHistoryVersion;
+  const normalized = app.normalizeRuntimeCache(cache, state);
+  assert.equal(normalized.priceHistory.size, 0);
+  assert.equal(normalized.historyAvailable, false);
+  assert.equal(normalized.addressSnapshots[0].balanceSats, 100);
+  assert.equal(normalized.addressSnapshots[0].txEvents.length, 1);
+});
+
+test("Retry-After supports seconds and HTTP dates, with a conservative default when CORS hides it", () => {
+  const { app } = harness();
+  const now = Date.UTC(2026, 0, 1);
+  assert.equal(app.getRetryAt("120", now), now + 120_000);
+  assert.equal(app.getRetryAt(new Date(now + 120_000).toUTCString(), now), now + 120_000);
+  assert.equal(app.getRetryAt(null, now), now + 60_000);
+  assert.equal(app.getRetryAt("garbage", now), now + 60_000);
+  assert.equal(app.getRetryAt("0", now), now);
+});
+
+test("rate-limited origins remain paused while fallback providers can still run", async () => {
+  const calls = [];
+  const { app } = harness({ fetch: async (url) => {
+    calls.push(url);
+    return url.includes("mempool") ? Response.json({}, { status: 429, headers: { "Retry-After": "120" } }) : Response.json({ ok: true });
+  } });
+  const first = "https://mempool.space/api/address/" + GENESIS;
+  await assert.rejects(app.fetchJson(first), (error) => error.isRateLimit && error.retryAt > Date.now());
+  await assert.rejects(app.fetchJson(first), /Retry after/);
+  assert.equal(calls.length, 1);
+  const fallback = await app.withFallback([() => app.fetchJson(first), () => app.fetchJson("https://blockstream.info/api/address/" + GENESIS)], "failed");
+  assert.equal(fallback.ok, true);
+  assert.equal(calls.length, 2);
+});
+
+test("short rate-limit delays retry once and abort promptly when data is cleared", async () => {
+  let calls = 0;
+  const { app } = harness({ fetch: async () => ++calls === 1 ? Response.json({}, { status: 429, headers: { "Retry-After": "0" } }) : Response.json({ ok: true }) });
+  assert.equal((await app.fetchJson("https://mempool.space/api/test")).ok, true);
+  assert.equal(calls, 2);
+  let requests = 0;
+  const aborting = harness({ fetch: async () => { requests++; return Response.json({}, { status: 429, headers: { "Retry-After": "1" } }); } });
+  const pending = aborting.app.fetchJson("https://mempool.space/api/test");
+  await tick();
+  aborting.app.cancelPendingDataWork();
+  await assert.rejects(pending, { name: "AbortError" });
+  assert.equal(requests, 1);
+});
+
+function refreshFixture() {
+  const { app, storage } = harness();
+  app.disableRendering();
+  const state = watchedState(app);
+  const second = { ...state.addresses[0], id: "second", address: GENESIS };
+  state.addresses.push(second);
+  const previousTime = Date.now() - 86_400_000;
+  const snapshots = state.addresses.map((entry) => ({
+    entry, provider: "saved", balanceSats: 100, usdValue: 1, refreshedAt: previousTime,
+    txEvents: [], balanceTimeline: [], hourlyBalanceTimeline: [], detailScope: "ALL", approximate: false,
+  }));
+  app.setRuntime({ hasLoadedOnce: true, addressSnapshots: snapshots, currentPriceUsd: 100_000 });
+  app.APILayer.fetchAddressBundle = async (address) => {
+    if (address === GENESIS) throw new Error("Provider unavailable");
+    return { provider: "test", bundle: { summary: summary(address), transactions: [transaction()], truncated: false } };
+  };
+  app.APILayer.fetchMarketData = async () => ({ currentPriceUsd: 100_000, priceHistory: new Map(), intradayPriceHistory: new Map(), fiatExchangeRates: new Map([["USD", 1]]), historyAvailable: false, historyMissingDays: 1 });
+  return { app, storage, previousTime };
+}
+
+test("partial overview refresh retains saved balances, per-address timestamps and failure status", async () => {
+  const { app, previousTime } = refreshFixture();
+  await app.refreshVault({ reason: "manual", allowSkeleton: false });
+  assert.equal(app.runtime.addressSnapshots.length, 2);
+  const failed = app.runtime.addressSnapshots.find((snapshot) => snapshot.entry.id === "second");
+  const fresh = app.runtime.addressSnapshots.find((snapshot) => snapshot.entry.id !== "second");
+  assert.equal(failed.balanceSats, 100);
+  assert.equal(failed.refreshedAt, previousTime);
+  assert.equal(failed.refreshFailed, true);
+  assert.ok(fresh.refreshedAt > previousTime);
+  assert.equal(fresh.refreshFailed, false);
+  assert.equal(app.PortfolioLayer.calculateTotals(app.runtime.addressSnapshots).balanceSats, 200);
+  const normalized = app.normalizeRuntimeCache(app.serializeRuntimeCache(app.runtime), app.state);
+  assert.equal(normalized.addressSnapshots[1].refreshFailed, true);
+  assert.equal(normalized.addressSnapshots[1].refreshedAt, previousTime);
+});
+
+test("total refresh failure keeps last good data and never advances its freshness", async () => {
+  const { app, previousTime } = refreshFixture();
+  app.APILayer.fetchAddressBundle = async () => { throw new Error("offline"); };
+  await assert.rejects(app.refreshVault({ reason: "manual", allowSkeleton: false }), /All address lookups failed/);
+  assert.equal(app.runtime.addressSnapshots.length, 2);
+  assert.ok(app.runtime.addressSnapshots.every((snapshot) => snapshot.refreshedAt === previousTime && snapshot.refreshFailed));
+});
+
+test("a price outage preserves cached prices and still accepts fresh address balances", async () => {
+  const { app } = refreshFixture();
+  app.APILayer.fetchMarketData = async () => { throw new Error("prices offline"); };
+  await app.refreshVault({ reason: "manual", allowSkeleton: false });
+  assert.equal(app.runtime.currentPriceUsd, 100_000);
+  assert.equal(app.runtime.priceStale, true);
+  assert.equal(app.runtime.addressSnapshots.length, 2);
+});
+
+test("two timed-out explorer attempts produce one clear message instead of duplicate abort errors", async () => {
+  let requests = 0;
+  const { app, context } = harness({ fetch: async (_, { signal }) => {
+    requests++;
+    return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  } });
+  context.window.setTimeout = (callback) => setTimeout(callback, 0);
+  await assert.rejects(app.APILayer.fetchAddressSummary(SEGWIT), (error) => {
+    assert.equal(error.message, "Data requests timed out. Click Refresh to try again.");
+    assert.equal(error.cause.errors.length, 2);
+    assert.ok(error.cause.errors.every((failure) => failure.isTimeout));
+    return true;
+  });
+  assert.equal(requests, 2);
+});
+
+test("provider failure details stay in the error cause instead of repeating in the user message", async () => {
+  const { app } = harness({ fetch: async () => Response.json({}, { status: 503 }) });
+  await assert.rejects(app.APILayer.fetchAddressSummary(SEGWIT), (error) => {
+    assert.equal(error.message, "Address summary lookup failed. Click Refresh to try again.");
+    assert.equal(error.cause.errors.length, 2);
+    assert.ok(!error.message.includes(" · "));
+    return true;
+  });
 });
