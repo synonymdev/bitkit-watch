@@ -207,3 +207,56 @@ test("address lookup timeouts show one readable warning and keep the address sav
   expect(await page.evaluate((address) => JSON.parse(localStorage.getItem("bitkit-vault-state-v1")).addresses.some(entry => entry.address === address), SEGWIT)).toBe(true);
   expect(errors).toEqual([]);
 });
+
+test("existing demo charts repair themselves on reload without clearing personal wallet data", async ({ context }) => {
+  const errors = collectErrors(context);
+  await mockApis(context, { failAddress: () => true });
+  const page = await context.newPage();
+  await page.goto("/");
+  const demo = page.getByRole("button", { name: "Satoshi", exact: false });
+  const initialCurve = await demo.locator('svg path[fill="none"]').getAttribute("d");
+  const initialBalance = await demo.locator(".wallet-card-stats").textContent();
+  const personalData = await page.evaluate((address) => {
+    const state = JSON.parse(localStorage.getItem("bitkit-vault-state-v1"));
+    const cache = JSON.parse(localStorage.getItem("bitkit-vault-runtime-cache-v1"));
+    const entry = { id: "personal-test", address, groupId: state.groups[0].id, tags: ["keep"], createdAt: new Date().toISOString() };
+    state.groups[0].name = "Personal savings";
+    state.addresses.push(entry);
+    state.lastUpdated = new Date().toISOString();
+    state.satoshiDemoLastRefreshedAt = state.lastUpdated;
+    const snapshot = { ...cache.addressSnapshots[0], entryId: entry.id, balanceSats: 777, txEvents: [], detailScope: "SUMMARY", balanceTimeline: [], hourlyBalanceTimeline: [] };
+    cache.addressSnapshots.push(snapshot);
+    localStorage.setItem("bitkit-vault-state-v1", JSON.stringify(state));
+    localStorage.setItem("bitkit-vault-runtime-cache-v1", JSON.stringify(cache));
+    return { entry, snapshot };
+  }, SEGWIT);
+  for (const truncateTransactions of [false, true]) {
+    await page.evaluate((truncate) => {
+      const key = "bitkit-vault-runtime-cache-v1";
+      const cache = JSON.parse(localStorage.getItem(key));
+      cache.timelineStart = null;
+      for (const snapshot of cache.addressSnapshots.filter((item) => item.entryId !== "personal-test")) {
+        snapshot.balanceTimeline = snapshot.balanceTimeline.slice(-2);
+        if (truncate) { snapshot.txEvents = snapshot.txEvents.slice(0, 3); snapshot.approximate = true; }
+      }
+      localStorage.setItem(key, JSON.stringify(cache));
+    }, truncateTransactions);
+    await page.reload();
+    await expect(demo.locator('svg path[fill="none"]')).toHaveAttribute("d", initialCurve);
+    await expect(demo.locator(".wallet-card-stats")).toHaveText(initialBalance);
+    await demo.click();
+    await expect(page.locator('#walletChartTabs [data-range="30D"]')).toBeVisible();
+    await page.locator('#walletChartTabs [data-range="30D"]').click();
+    await expect(page.locator("#walletChartStage svg")).toBeVisible();
+    const saved = await page.evaluate(() => {
+      const state = JSON.parse(localStorage.getItem("bitkit-vault-state-v1"));
+      const cache = JSON.parse(localStorage.getItem("bitkit-vault-runtime-cache-v1"));
+      return { entry: state.addresses.find((item) => item.id === "personal-test"), snapshot: cache.addressSnapshots.find((item) => item.entryId === "personal-test"), name: state.groups[0].name };
+    });
+    expect(saved.entry).toEqual(personalData.entry);
+    expect(saved.snapshot).toEqual(personalData.snapshot);
+    expect(saved.name).toBe("Personal savings");
+    await page.locator("#brandHomeButton").click();
+  }
+  expect(errors).toEqual([]);
+});

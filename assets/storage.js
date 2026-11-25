@@ -396,15 +396,28 @@
         return false;
       }
 
+      // A refresh of another wallet used to overwrite the shared bounds. Recover
+      // each all-history snapshot from its own transactions, even if its saved
+      // daily curve is non-flat but contains only a couple of days.
+      const dailyTimes = snapshot.balanceTimeline.map((point) => point.timestamp);
+      let dailyStart = dailyTimes.length ? Math.min(...dailyTimes) : timelineStart;
+      const dailyEnd = dailyTimes.length ? Math.max(...dailyTimes) : (snapshot.refreshedAt ?? timelineEnd);
+      const eventTimes = snapshot.txEvents.filter((event) => event.confirmed).map((event) => event.timestamp);
+      if (snapshot.detailScope === "ALL" && eventTimes.length) {
+        const oldestDay = Math.floor(Math.min(...eventTimes) / (24 * HOUR_MS)) * 24 * HOUR_MS;
+        dailyStart = Number.isFinite(dailyStart) ? Math.min(dailyStart, oldestDay) : oldestDay;
+      }
+
       let rebuilt = false;
       if (
-        shouldRebuildCachedTimeline(snapshot.balanceTimeline, snapshot.txEvents, timelineStart, timelineEnd)
+        (dailyTimes.length && Number.isFinite(dailyStart) && dailyStart < Math.min(...dailyTimes)) ||
+        shouldRebuildCachedTimeline(snapshot.balanceTimeline, snapshot.txEvents, dailyStart, dailyEnd)
       ) {
         snapshot.balanceTimeline = buildDailyBalanceTimeline(
           snapshot.balanceSats,
           snapshot.txEvents,
-          timelineStart,
-          timelineEnd
+          dailyStart,
+          dailyEnd
         );
         rebuilt = true;
       }

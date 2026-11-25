@@ -28,7 +28,7 @@ Requests omit credentials and referrers, bypass the browser HTTP cache, and reje
 
 ## Satoshi Demo Snapshot
 
-The bundled Satoshi demo wallet ships with bounded all-time per-address history and market data so a new browser can render the demo immediately.
+The bundled Satoshi demo wallet ships with bounded all-time per-address history and market data so a new browser can render the demo immediately. Existing browsers rebuild shortened daily charts from their cached transactions on reload. If the public demo still lacks the month covered by the bundled snapshot, only its deficient address snapshots are restored; personal wallets and healthy demo caches are retained. Chart ranges and incremental demo refreshes use each address's own history bounds.
 
 Regenerate the release asset with:
 

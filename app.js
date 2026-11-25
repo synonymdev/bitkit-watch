@@ -561,27 +561,20 @@
   }
 
   function hydrateBakedDemoRuntimeIfNeeded() {
-    if (!SATOSHI_BAKED_SNAPSHOT || !isFreshSatoshiDemoVault()) {
+    const demoGroupId = getBundledSatoshiDemoGroupId();
+    if (!SATOSHI_BAKED_SNAPSHOT || !demoGroupId) {
       return false;
     }
 
     const bakedRuntime = SATOSHI_BAKED_SNAPSHOT.runtimeCache;
-    const bakedEntries = state.addresses.filter((entry) =>
-      Object.prototype.hasOwnProperty.call(SATOSHI_BAKED_SNAPSHOT.balancesByAddress, entry.address)
-    );
+    const bakedEntries = state.addresses.filter((entry) => entry.groupId === demoGroupId);
     if (!bakedEntries.length) {
       return false;
     }
 
-    const shouldUseBakedDetails =
-      bakedRuntime &&
-      (!hasCompleteCachedCoverage(bakedEntries) ||
-        !hasCompleteDetailCoverage(bakedRuntime.historyScope, bakedEntries));
-    if (runtime.addressSnapshots.length && !shouldUseBakedDetails) {
-      return false;
-    }
-
-    const currentPriceUsd = Number.isFinite(bakedRuntime?.currentPriceUsd)
+    const currentPriceUsd = Number.isFinite(runtime.currentPriceUsd)
+      ? runtime.currentPriceUsd
+      : Number.isFinite(bakedRuntime?.currentPriceUsd)
       ? bakedRuntime.currentPriceUsd
       : SATOSHI_BAKED_SNAPSHOT.currentPriceUsd;
     const timelineStart = Number.isFinite(bakedRuntime?.timelineStart)
@@ -596,6 +589,7 @@
     const intradayEnd = Number.isFinite(bakedRuntime?.intradayEnd)
       ? bakedRuntime.intradayEnd
       : null;
+    const existingById = getSnapshotsById();
     const snapshots = bakedEntries.map((entry) => {
       const bakedSnapshot = bakedRuntime?.snapshotsByAddress.get(entry.address);
       if (!bakedSnapshot) {
@@ -637,31 +631,40 @@
         approximate: bakedSnapshot.approximate,
         detailScope: bakedSnapshot.detailScope,
       };
+    }).filter((baked) => {
+      const existing = existingById.get(baked.entry.id);
+      if (!existing || !hasRequiredDetailScope(existing, baked.detailScope)) return true;
+      const savedCoverage = getCommonReliableDailyCoverage([existing]);
+      const bundledCoverage = getCommonReliableDailyCoverage([baked]);
+      // Only repair the public demo when its saved history cannot supply the
+      // month that the bundled data covers. Keep healthy, newer demo caches.
+      return bundledCoverage && (!savedCoverage || (
+        savedCoverage.end - savedCoverage.start < 29 * DAY_MS &&
+        bundledCoverage.end - bundledCoverage.start >= 29 * DAY_MS
+      ));
     });
 
     if (!snapshots.length) {
       return false;
     }
 
+    replaceAddressSnapshots(snapshots);
     runtime = {
       ...runtime,
       hasLoadedOnce: true,
-      historyScope: bakedRuntime?.historyScope || "SUMMARY",
+      historyScope: pickHigherHistoryScope(runtime.historyScope, bakedRuntime?.historyScope),
       currentPriceUsd,
-      fiatExchangeRates: bakedRuntime?.fiatExchangeRates || runtime.fiatExchangeRates,
-      priceHistory: bakedRuntime?.priceHistory || runtime.priceHistory,
-      intradayPriceHistory: bakedRuntime?.intradayPriceHistory || runtime.intradayPriceHistory,
+      fiatExchangeRates: mergeFiatExchangeRates(runtime.fiatExchangeRates, bakedRuntime?.fiatExchangeRates),
+      priceHistory: mergeNumberMaps(bakedRuntime?.priceHistory, runtime.priceHistory),
+      intradayPriceHistory: mergeNumberMaps(bakedRuntime?.intradayPriceHistory, runtime.intradayPriceHistory),
       historyAvailable: bakedRuntime?.historyAvailable ?? runtime.historyAvailable,
       historyMissingDays: bakedRuntime?.historyMissingDays ?? runtime.historyMissingDays,
-      addressSnapshots: snapshots,
-      partialFailures: [],
       approximationMode:
-        Boolean(bakedRuntime?.approximationMode) || snapshots.some((snapshot) => snapshot.approximate),
-      timelineStart,
-      timelineEnd,
-      intradayStart,
-      intradayEnd,
-      banner: null,
+        Boolean(bakedRuntime?.approximationMode) || runtime.addressSnapshots.some((snapshot) => snapshot.approximate),
+      timelineStart: Number.isFinite(timelineStart) ? Math.min(runtime.timelineStart ?? timelineStart, timelineStart) : runtime.timelineStart,
+      timelineEnd: Number.isFinite(timelineEnd) ? Math.max(runtime.timelineEnd ?? timelineEnd, timelineEnd) : runtime.timelineEnd,
+      intradayStart: runtime.intradayStart ?? intradayStart,
+      intradayEnd: runtime.intradayEnd ?? intradayEnd,
     };
 
     StorageLayer.saveRuntimeCache(runtime);
@@ -2395,16 +2398,14 @@
             : coverage.start,
           end: coverage.end,
         };
-      })
-      .filter(Boolean);
-    return getCommonCoverage(coverages);
+      });
+    return coverages.some((coverage) => !coverage) ? null : getCommonCoverage(coverages);
   }
 
   function getCommonTimelineCoverage(snapshots, timelineKey) {
     const coverages = (Array.isArray(snapshots) ? snapshots : [])
-      .map((snapshot) => getTimelineCoverage(snapshot?.[timelineKey]))
-      .filter(Boolean);
-    return getCommonCoverage(coverages);
+      .map((snapshot) => getTimelineCoverage(snapshot?.[timelineKey]));
+    return coverages.some((coverage) => !coverage) ? null : getCommonCoverage(coverages);
   }
 
   function getTimelineCoverage(points) {
@@ -3294,10 +3295,11 @@
     let dailyTimeline = [];
     let reliableTimelineStart = null;
     let hasReliableDailyTimeline = false;
-    if (hasDetailData && Number.isFinite(runtime.timelineStart) && Number.isFinite(runtime.timelineEnd)) {
+    const dailyCoverage = getCommonReliableDailyCoverage(detailSnapshots);
+    if (hasDetailData && dailyCoverage) {
       reliableTimelineStart = getReliableTimelineStartForSnapshots(
         detailSnapshots,
-        runtime.timelineStart,
+        dailyCoverage.start,
         {
           trimToFirstTransaction: requiredDetailScope === "ALL",
         }
@@ -3306,7 +3308,7 @@
         detailSnapshots,
         runtime.priceHistory,
         reliableTimelineStart,
-        runtime.timelineEnd
+        dailyCoverage.end
       );
       hasReliableDailyTimeline = dailyTimeline.length >= 2;
     }
@@ -3319,13 +3321,14 @@
 
     let intradayTimeline = [];
     let hasReliableIntradayTimeline = false;
-    if (hasDetailData && Number.isFinite(runtime.intradayStart) && Number.isFinite(runtime.intradayEnd)) {
+    const intradayCoverage = getCommonTimelineCoverage(detailSnapshots, "hourlyBalanceTimeline");
+    if (hasDetailData && intradayCoverage) {
       intradayTimeline = combineSnapshotTimelines(
         detailSnapshots,
         "hourlyBalanceTimeline",
         runtime.intradayPriceHistory,
-        runtime.intradayStart,
-        runtime.intradayEnd,
+        intradayCoverage.start,
+        intradayCoverage.end,
         {
           stepMs: HOUR_MS,
           alignTime: startOfUtcHour,
@@ -3398,10 +3401,11 @@
     let dailyTimeline = [];
     let reliableTimelineStart = null;
     let hasReliableDailyTimeline = false;
-    if (hasDetailData && Number.isFinite(runtime.timelineStart) && Number.isFinite(runtime.timelineEnd)) {
+    const dailyCoverage = getCommonReliableDailyCoverage(snapshots);
+    if (hasDetailData && dailyCoverage) {
       reliableTimelineStart = getReliableTimelineStartForSnapshots(
         snapshots,
-        runtime.timelineStart,
+        dailyCoverage.start,
         {
           trimToFirstTransaction: requiredDetailScope === "ALL",
         }
@@ -3410,7 +3414,7 @@
         snapshots,
         runtime.priceHistory,
         reliableTimelineStart,
-        runtime.timelineEnd
+        dailyCoverage.end
       );
       hasReliableDailyTimeline = dailyTimeline.length >= 2;
     }
@@ -3423,13 +3427,14 @@
 
     let intradayTimeline = [];
     let hasReliableIntradayTimeline = false;
-    if (hasDetailData && Number.isFinite(runtime.intradayStart) && Number.isFinite(runtime.intradayEnd)) {
+    const intradayCoverage = getCommonTimelineCoverage(snapshots, "hourlyBalanceTimeline");
+    if (hasDetailData && intradayCoverage) {
       intradayTimeline = combineSnapshotTimelines(
         snapshots,
         "hourlyBalanceTimeline",
         runtime.intradayPriceHistory,
-        runtime.intradayStart,
-        runtime.intradayEnd,
+        intradayCoverage.start,
+        intradayCoverage.end,
         {
           stepMs: HOUR_MS,
           alignTime: startOfUtcHour,
@@ -3853,7 +3858,10 @@
         balanceTimeline: buildDailyBalanceTimeline(
           balanceSats,
           txEvents,
-          timelineStart,
+          Math.min(...[
+            getTimelineStartTimestamp(currentSnapshot.balanceTimeline),
+            getOldestKnownTransactionTimestamp({ txEvents }),
+          ].filter(Number.isFinite), endTimestamp),
           endTimestamp
         ),
         hourlyBalanceTimeline: buildIntervalBalanceTimeline(
@@ -5852,24 +5860,10 @@
 
     let timeline = [];
     if (dailySnapshots.length === addressCount) {
-      const latestSnapshotTimestamp = Math.max(
-        ...dailySnapshots
-          .map((snapshot) => snapshot.balanceTimeline[snapshot.balanceTimeline.length - 1]?.timestamp)
-          .filter(Number.isFinite)
-      );
-      const endTimestamp = Number.isFinite(runtime.timelineEnd)
-        ? runtime.timelineEnd
-        : latestSnapshotTimestamp;
-      const oldestSnapshotTimestamp = Math.min(
-        ...dailySnapshots
-          .map((snapshot) => snapshot.balanceTimeline[0]?.timestamp)
-          .filter(Number.isFinite)
-      );
-      const timelineStart = Number.isFinite(runtime.timelineStart)
-        ? runtime.timelineStart
-        : oldestSnapshotTimestamp;
-      const reliableTimelineStart = Number.isFinite(timelineStart)
-        ? getReliableTimelineStartForSnapshots(dailySnapshots, timelineStart, {
+      const coverage = getCommonReliableDailyCoverage(dailySnapshots);
+      const endTimestamp = coverage?.end;
+      const reliableTimelineStart = coverage
+        ? getReliableTimelineStartForSnapshots(dailySnapshots, coverage.start, {
             trimToFirstTransaction: true,
           })
         : null;
@@ -7120,16 +7114,6 @@
 
   function normalizeWalletName(value) {
     return typeof value === "string" ? value.trim().replace(/\s+/g, " ").slice(0, 32) : "";
-  }
-
-  function isFreshSatoshiDemoVault() {
-    if (state.lastUpdated || state.addresses.length !== SATOSHI_DEMO_ADDRESSES.length) {
-      return false;
-    }
-
-    return state.addresses.every((entry) =>
-      SATOSHI_DEMO_ADDRESS_KEYS.has(normalizeBitcoinAddress(entry.address))
-    );
   }
 
   function formatBootstrapTimestamp(value) {
