@@ -80,9 +80,12 @@ test("watchlist persists, rejects secrets, and keeps balances after a partial re
     const id = state.addresses.find((entry) => entry.address === address)?.id;
     return cache.addressSnapshots.find((snapshot) => snapshot.entryId === id)?.refreshFailed;
   }, SECOND)).toBe(true);
+  // The failure flag is persisted before market requests and the final cache write.
+  await expect(page.locator("#refreshButton")).toBeEnabled();
   await expect(page.locator("#walletPrimarySummary")).toHaveText(before);
   // Simulate a cache with no market coverage. Real prices from the public demo can otherwise be reused.
-  await page.evaluate(() => {
+  // Change it before app startup, so an in-flight refresh cannot overwrite the fixture.
+  await page.addInitScript(() => {
     const key = "bitkit-vault-runtime-cache-v1";
     const cache = JSON.parse(localStorage.getItem(key));
     cache.priceHistory = []; cache.intradayPriceHistory = []; cache.historyAvailable = false;
